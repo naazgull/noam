@@ -440,6 +440,21 @@ constexpr char MARKDOWN_THEMATIC_BREAK_QUERY[] = R"scm(
 (thematic_break) @break
 )scm";
 
+// Locates setext headings (text underlined by a line of `=` or `-`) —
+// structural extraction like the queries above: the heading spans several
+// source lines, the last one being the underline, so it is rendered as a
+// whole rather than one physical line at a time.
+constexpr char MARKDOWN_SETEXT_HEADING_QUERY[] = R"scm(
+(setext_heading heading_content: (paragraph) @content) @heading
+)scm";
+
+// Locates paragraphs — structural extraction like the queries above: a
+// paragraph's source lines are joined into one before rendering (soft
+// breaks, see render_markdown_lines), so its full extent is needed up front.
+constexpr char MARKDOWN_PARAGRAPH_QUERY[] = R"scm(
+(paragraph) @paragraph
+)scm";
+
 // Hand-written against tree-sitter-markdown-inline. Bold/italic/code spans
 // don't have a separate child node for their text content — e.g.
 // strong_emphasis is just the two pairs of emphasis_delimiter nodes with
@@ -452,12 +467,18 @@ constexpr char MARKDOWN_INLINE_HIGHLIGHTS_QUERY[] = R"scm(
 (strong_emphasis) @markup.strong
 (emphasis) @markup.italic
 (code_span) @markup.code
-(link_text) @markup.link
+(inline_link (link_text) @markup.link)
 
 (emphasis_delimiter) @_hidden
 (code_span_delimiter) @_hidden
 (link_destination) @_hidden
-["[" "]" "(" ")"] @_hidden
+; Only an inline link's or image's own punctuation is markup; any other
+; brackets or parentheses in the text (e.g. "a (b)") are content. Reference
+; links ([x], [x][], [x][y]) are left as written: whether one is a link
+; depends on a definition elsewhere in the document, and "array[0]" parses
+; as one too.
+(inline_link ["[" "]" "(" ")"] @_hidden)
+(image ["!" "[" "]" "(" ")"] @_hidden)
 )scm";
 
 // Covers the union of capture names used across all four queries above,
@@ -1244,6 +1265,203 @@ auto find_thematic_breaks(std::string const& _content)
     return _breaks;
 }
 
+// Parses the whole `_content` once to find paragraphs — same one-shot block
+// parse as find_thematic_breaks above. A setext heading's content is also a
+// paragraph node, but is left out: its lines keep their own rendering.
+auto find_paragraphs(std::string const& _content) -> std::vector<std::pair<uint32_t, uint32_t>> {
+    std::vector<std::pair<uint32_t, uint32_t>> _paragraphs;
+    language_profile& _profile = profile_for(language::MARKDOWN);
+    ensure_profile_ready(_profile);
+    if (!_profile.__query) { return _paragraphs; }
+
+    static ts_query_ptr ___paragraph_query = [&_profile] {
+        uint32_t _error_offset;
+        TSQueryError _error_type;
+        return ts_query_ptr(
+          ts_query_new(_profile.__get_language(),
+                       MARKDOWN_PARAGRAPH_QUERY,
+                       static_cast<uint32_t>(sizeof(MARKDOWN_PARAGRAPH_QUERY) - 1),
+                       &_error_offset,
+                       &_error_type),
+          ts_query_delete);
+    }();
+    if (!___paragraph_query) { return _paragraphs; }
+
+    std::string _source = _content + "\n"; // block grammar needs a trailing newline
+    ts_tree_ptr _tree(
+      ts_parser_parse_string(
+        _profile.__parser.get(), nullptr, _source.c_str(), static_cast<uint32_t>(_source.size())),
+      ts_tree_delete);
+    TSNode _root = ts_tree_root_node(_tree.get());
+
+    ts_query_cursor_ptr _cursor(ts_query_cursor_new(), ts_query_cursor_delete);
+    ts_query_cursor_exec(_cursor.get(), ___paragraph_query.get(), _root);
+
+    TSQueryMatch _match;
+    while (ts_query_cursor_next_match(_cursor.get(), &_match)) {
+        for (uint16_t _i = 0; _i < _match.capture_count; ++_i) {
+            TSNode _node = _match.captures[_i].node;
+            TSNode _parent = ts_node_parent(_node);
+            if (!ts_node_is_null(_parent) &&
+                std::string_view{ ts_node_type(_parent) } == "setext_heading") {
+                continue;
+            }
+            _paragraphs.emplace_back(ts_node_start_byte(_node), ts_node_end_byte(_node));
+        }
+    }
+    return _paragraphs;
+}
+
+// Whether a paragraph source line ends in a CommonMark hard line break (two
+// or more trailing spaces, or a trailing backslash).
+auto ends_with_hard_break(std::string const& _line) -> bool {
+    return (_line.size() >= 2 && _line.compare(_line.size() - 2, 2, "  ") == 0) ||
+           (!_line.empty() && _line.back() == '\\');
+}
+
+// A paragraph's continuation line with its container prefix removed —
+// leading indentation (list item continuation) and block-quote markers —
+// leaving only the paragraph text.
+auto strip_continuation(std::string const& _line) -> std::string {
+    size_t _p = _line.find_first_not_of(" \t");
+    while (_p != std::string::npos && _line[_p] == '>') {
+        _p = _line.find_first_not_of(" \t", _p + 1);
+    }
+    return _p == std::string::npos ? std::string{} : _line.substr(_p);
+}
+
+struct setext_heading_range {
+    uint32_t __block_start, __block_end;     // whole setext_heading, underline included
+    uint32_t __content_start, __content_end; // the heading text (its paragraph)
+};
+
+// Parses the whole `_content` once to find setext headings — same one-shot
+// block parse as find_thematic_breaks above.
+auto find_setext_headings(std::string const& _content) -> std::vector<setext_heading_range> {
+    std::vector<setext_heading_range> _headings;
+    language_profile& _profile = profile_for(language::MARKDOWN);
+    ensure_profile_ready(_profile);
+    if (!_profile.__query) { return _headings; }
+
+    static ts_query_ptr ___setext_query = [&_profile] {
+        uint32_t _error_offset;
+        TSQueryError _error_type;
+        return ts_query_ptr(
+          ts_query_new(_profile.__get_language(),
+                       MARKDOWN_SETEXT_HEADING_QUERY,
+                       static_cast<uint32_t>(sizeof(MARKDOWN_SETEXT_HEADING_QUERY) - 1),
+                       &_error_offset,
+                       &_error_type),
+          ts_query_delete);
+    }();
+    if (!___setext_query) { return _headings; }
+
+    std::string _source = _content + "\n"; // block grammar needs a trailing newline
+    ts_tree_ptr _tree(
+      ts_parser_parse_string(
+        _profile.__parser.get(), nullptr, _source.c_str(), static_cast<uint32_t>(_source.size())),
+      ts_tree_delete);
+    TSNode _root = ts_tree_root_node(_tree.get());
+
+    ts_query_cursor_ptr _cursor(ts_query_cursor_new(), ts_query_cursor_delete);
+    ts_query_cursor_exec(_cursor.get(), ___setext_query.get(), _root);
+
+    TSQueryMatch _match;
+    while (ts_query_cursor_next_match(_cursor.get(), &_match)) {
+        setext_heading_range _range{ 0, 0, 0, 0 };
+        for (uint16_t _i = 0; _i < _match.capture_count; ++_i) {
+            TSNode _node = _match.captures[_i].node;
+            uint32_t _name_len;
+            std::string_view _name{ ts_query_capture_name_for_id(
+                                      ___setext_query.get(), _match.captures[_i].index, &_name_len),
+                                    _name_len };
+            if (_name == "heading") {
+                _range.__block_start = ts_node_start_byte(_node);
+                _range.__block_end = ts_node_end_byte(_node);
+            }
+            else {
+                _range.__content_start = ts_node_start_byte(_node);
+                _range.__content_end = ts_node_end_byte(_node);
+            }
+        }
+        _headings.push_back(_range);
+    }
+
+    // A one-line list item directly followed by a `---` line is a heading
+    // too (e.g. "1. Overview" underlined): blocks are separated by a blank
+    // line, so the underline belongs to the item rather than being a
+    // thematic break after a list.
+    std::vector<TSNode> _stack{ _root };
+    while (!_stack.empty()) {
+        TSNode _node = _stack.back();
+        _stack.pop_back();
+        uint32_t _n = ts_node_named_child_count(_node);
+        for (uint32_t _c = 0; _c < _n; ++_c) { _stack.push_back(ts_node_named_child(_node, _c)); }
+        if (std::string_view{ ts_node_type(_node) } != "list" || _n != 1) { continue; }
+        TSNode _next = ts_node_next_named_sibling(_node);
+        if (ts_node_is_null(_next) || std::string_view{ ts_node_type(_next) } != "thematic_break") {
+            continue;
+        }
+        uint32_t _item_start = ts_node_start_byte(_node);
+        uint32_t _break_start = ts_node_start_byte(_next);
+        uint32_t _break_end = std::min<uint32_t>(ts_node_end_byte(_next), _content.size());
+        size_t _eol = _content.find('\n', _item_start);
+        // The item is a single line and the underline is the very next one
+        // (only a container prefix — indentation, '>' — before it).
+        if (_eol == std::string::npos || _eol + 1 > _break_start ||
+            _content.substr(_eol + 1, _break_start - (_eol + 1)).find_first_not_of(" \t>") !=
+              std::string::npos) {
+            continue;
+        }
+        if (_content.substr(_break_start, _break_end - _break_start).find_first_not_of(" \t\r\n-") !=
+            std::string::npos) {
+            continue;
+        }
+        uint32_t _text_end = static_cast<uint32_t>(_eol);
+        if (_text_end > _item_start && _content[_text_end - 1] == '\r') { --_text_end; }
+        _headings.push_back({ _item_start, ts_node_end_byte(_next), _item_start, _text_end });
+    }
+    return _headings;
+}
+
+struct list_item_range {
+    uint32_t __start, __end;               // the whole list_item, nested items included
+    uint32_t __marker_start, __marker_end; // its marker ("- ", "1. "), trailing space included
+};
+
+// Parses the whole `_content` once to find list items and their markers —
+// same one-shot block parse as find_thematic_breaks above. The tree is
+// walked directly: a list_item's first named child is its marker, of one of
+// the list_marker_* types.
+auto find_list_items(std::string const& _content) -> std::vector<list_item_range> {
+    std::vector<list_item_range> _items;
+    language_profile& _profile = profile_for(language::MARKDOWN);
+    ensure_profile_ready(_profile);
+    if (!_profile.__query) { return _items; }
+
+    std::string _source = _content + "\n"; // block grammar needs a trailing newline
+    ts_tree_ptr _tree(
+      ts_parser_parse_string(
+        _profile.__parser.get(), nullptr, _source.c_str(), static_cast<uint32_t>(_source.size())),
+      ts_tree_delete);
+
+    std::vector<TSNode> _stack{ ts_tree_root_node(_tree.get()) };
+    while (!_stack.empty()) {
+        TSNode _node = _stack.back();
+        _stack.pop_back();
+        uint32_t _n = ts_node_named_child_count(_node);
+        for (uint32_t _c = 0; _c < _n; ++_c) { _stack.push_back(ts_node_named_child(_node, _c)); }
+        if (std::string_view{ ts_node_type(_node) } != "list_item" || _n == 0) { continue; }
+        TSNode _marker = ts_node_named_child(_node, 0);
+        if (!std::string_view{ ts_node_type(_marker) }.starts_with("list_marker")) { continue; }
+        _items.push_back({ ts_node_start_byte(_node),
+                           ts_node_end_byte(_node),
+                           ts_node_start_byte(_marker),
+                           ts_node_end_byte(_marker) });
+    }
+    return _items;
+}
+
 // Sums the visible display width of `_text`'s resolved markdown spans,
 // hidden markup (delimiters, etc.) excluded — used only to size a table
 // column to its natural (unwrapped) content width before deciding how much
@@ -1454,6 +1672,9 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
     std::vector<fenced_code_range> _fences = find_fenced_code_blocks(_content);
     std::vector<pipe_table_range> _tables = find_pipe_tables(_content);
     std::vector<std::pair<uint32_t, uint32_t>> _breaks = find_thematic_breaks(_content);
+    std::vector<setext_heading_range> _setexts = find_setext_headings(_content);
+    std::vector<list_item_range> _items = find_list_items(_content);
+    std::vector<std::pair<uint32_t, uint32_t>> _paragraphs = find_paragraphs(_content);
 
     ftxui::Elements _lines;
     size_t _start = 0;
@@ -1472,6 +1693,54 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
         if (_break != nullptr) {
             _lines.push_back(rule_element(_width, noam::theme().__syntax.__markup_ruler));
             _start = _break->second;
+            continue;
+        }
+
+        // Start of a setext heading (text underlined by `===`/`---`)? Render
+        // its text as one heading line — with an atx marker in front, so the
+        // line parse styles it as a heading (and hides the marker) — and skip
+        // the underline instead of rendering it as literal text.
+        size_t _setext_eol = _content.find('\n', _start);
+        size_t _setext_line_end = _setext_eol == std::string::npos ? _content.size() : _setext_eol;
+        setext_heading_range const* _setext = nullptr;
+        for (auto const& _h : _setexts) {
+            if (_h.__block_start >= _start && _h.__block_start <= _setext_line_end) {
+                _setext = &_h;
+                break;
+            }
+        }
+        if (_setext != nullptr) {
+            std::string _raw = _content.substr(
+              _setext->__content_start,
+              std::min<size_t>(_setext->__content_end, _content.size()) - _setext->__content_start);
+            std::string _text;
+            size_t _pos = 0;
+            while (_pos <= _raw.size()) {
+                size_t _raw_nl = _raw.find('\n', _pos);
+                std::string _piece = _raw.substr(
+                  _pos, _raw_nl == std::string::npos ? std::string::npos : _raw_nl - _pos);
+                if (_pos != 0) { _piece = strip_continuation(_piece); }
+                _piece.erase(_piece.find_last_not_of(" \t") + 1);
+                if (!_piece.empty()) { _text += (_text.empty() ? "" : " ") + _piece; }
+                if (_raw_nl == std::string::npos) { break; }
+                _pos = _raw_nl + 1;
+            }
+            std::string _line =
+              _content.substr(_start, _setext->__block_start - _start) + "# " + _text;
+            for (auto& _row : render_markdown_paragraph(_line, _width, block_quote_depth(_line))) {
+                _lines.push_back(std::move(_row));
+            }
+            // Continue after the underline line, newline included.
+            size_t _end = _setext->__block_end;
+            if (_end > 0 && _end <= _content.size() && _content[_end - 1] != '\n') {
+                size_t _end_nl = _content.find('\n', _end);
+                _end = _end_nl == std::string::npos ? _content.size() + 1 : _end_nl + 1;
+            }
+            if (_end > _content.size() ||
+                (_end == _content.size() && (_content.empty() || _content.back() != '\n'))) {
+                break;
+            }
+            _start = _end;
             continue;
         }
 
@@ -1570,8 +1839,62 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
 
         std::string _line = _content.substr(_start, _line_end - _start);
         int _quote_depth = block_quote_depth(_line);
-        for (auto& _row : render_markdown_paragraph(_line, _width, _quote_depth)) {
-            _lines.push_back(std::move(_row));
+
+        // Inside a paragraph, a newline is a soft break (CommonMark): join the
+        // paragraph's following source lines onto this one with a space, so
+        // it re-wraps to `_width` instead of keeping the source's line
+        // lengths. A hard break still ends the rendered line; the line after
+        // it resumes here, mid-paragraph, without its container prefix.
+        size_t _text_start = std::min(_content.find_first_not_of(" \t", _start), _line_end);
+        for (auto const& _p : _paragraphs) {
+            if (_p.first > _line_end || _p.second <= _text_start) { continue; }
+            if (_p.first < _start) { _line = strip_continuation(_line); }
+            // A paragraph's range can reach into the next line's indentation
+            // (e.g. up to a nested list item's marker), so the next line only
+            // continues the paragraph when its text starts inside the range.
+            while (_nl != std::string::npos &&
+                   _content.find_first_not_of(" \t", _nl + 1) < _p.second &&
+                   !ends_with_hard_break(_line)) {
+                size_t _next = _nl + 1;
+                _nl = _content.find('\n', _next);
+                _line_end = _nl == std::string::npos ? _content.size() : _nl;
+                _line += " " + strip_continuation(_content.substr(_next, _line_end - _next));
+            }
+            break;
+        }
+
+        // A line inside a list item keeps its indentation (the item's nesting)
+        // as a prefix instead of handing it to the line parse, where four or
+        // more spaces would read as an indented code block. Rows wrapped past
+        // the first are indented by `_hang`, lining up under the item's text.
+        int _indent = 0;
+        int _hang = 0;
+        if (_quote_depth == 0) {
+            for (auto const& _item : _items) {
+                if (_item.__start >= _line_end || _item.__end <= _start) { continue; }
+                size_t _ws = std::min(_content.find_first_not_of(' ', _start), _line_end);
+                _indent = static_cast<int>(_ws - _start);
+                _hang = _indent;
+                for (auto const& _i : _items) {
+                    if (_i.__marker_start == _ws) {
+                        _hang = static_cast<int>(_i.__marker_end - _start);
+                        break;
+                    }
+                }
+                _line.erase(0, std::min(_line.find_first_not_of(' '), _line.size()));
+                break;
+            }
+        }
+
+        ftxui::Elements _rows =
+          render_markdown_paragraph(_line, std::max(_width - _hang, 1), _quote_depth);
+        for (size_t _r = 0; _r < _rows.size(); ++_r) {
+            int _pad = _r == 0 ? _indent : _hang;
+            if (_pad > 0) {
+                _rows[_r] = ftxui::hbox(
+                  { ftxui::text(std::string(static_cast<size_t>(_pad), ' ')), std::move(_rows[_r]) });
+            }
+            _lines.push_back(std::move(_rows[_r]));
         }
         if (_nl == std::string::npos) { break; }
         _start = _nl + 1;

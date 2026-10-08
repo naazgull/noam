@@ -9,8 +9,9 @@ namespace noam {
 // Renders `_text` as markdown — headings, emphasis, code spans, links,
 // GFM pipe tables, thematic breaks (`---`/`***`/`___`, 3 or more, rendered
 // as a full-width rule) — via tree-sitter-markdown, word-wrapped to
-// `_width` columns. Splits on
-// explicit '\n' first (hard breaks). A fenced code block with a recognized
+// `_width` columns. Within a paragraph a '\n' is a soft break (the lines
+// are joined and re-wrapped); a hard break (two trailing spaces or a
+// trailing backslash) and a new block start a new line. A fenced code block with a recognized
 // declared language (```cpp/c++/cxx/hpp, ```json, ```lua, ```python/py,
 // ```rust/rs, ```diff/patch) has its content syntax-highlighted via that
 // language's own tree-sitter grammar (language injection, same mechanism as

@@ -33,11 +33,19 @@ int main(int _argc, char* _argv[]) {
     auto _screen = ftxui::ScreenInteractive::FullscreenAlternateScreen();
     int _top = 0;       // first visible row
     int _row_count = 0; // rows produced by the last render
+    bool _repainted = false;
 
     // Sizes come from the live terminal, not the screen's dimx()/dimy(): on a
     // resize, ftxui renders the frame before it updates the screen's
     // dimensions, so those would still report the previous size.
     auto _view = ftxui::Renderer([&] {
+        // At start-up ftxui queries the terminal (cursor shape, version); a
+        // terminal that doesn't understand a query can echo it onto the first
+        // frame. Request a second frame right away, which repaints over it.
+        if (!_repainted) {
+            _repainted = true;
+            _screen.PostEvent(ftxui::Event::Custom);
+        }
         auto _size = ftxui::Terminal::Size();
         ftxui::Elements _rows = noam::render_markdown_lines(_content, std::max(_size.dimx, 1));
         _row_count = static_cast<int>(_rows.size());
