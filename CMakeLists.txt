@@ -90,6 +90,7 @@ set(NOAM_TREE_SITTER_GRAMMARS
 add_executable(noam
   src/document.cpp
   src/main.cpp
+  src/pager.cpp
   src/text_render.cpp
   src/theme.cpp
 )

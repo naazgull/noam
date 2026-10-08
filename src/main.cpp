@@ -6,7 +6,7 @@
 #include <ftxui/screen/terminal.hpp>
 #include <iostream>
 #include <noam/document.h>
-#include <noam/text_render.h>
+#include <noam/pager.h>
 #include <noam/theme.h>
 #include <string>
 #include <zapata/json.h>
@@ -28,11 +28,9 @@ int main(int _argc, char* _argv[]) {
     }
     noam::set_theme(_config("theme"));
 
-    std::string _content = noam::load_document(_argv[1]);
+    noam::pager _pager{ noam::load_document(_argv[1]) };
 
     auto _screen = ftxui::ScreenInteractive::FullscreenAlternateScreen();
-    int _top = 0;       // first visible row
-    int _row_count = 0; // rows produced by the last render
     bool _repainted = false;
 
     // Sizes come from the live terminal, not the screen's dimx()/dimy(): on a
@@ -47,26 +45,19 @@ int main(int _argc, char* _argv[]) {
             _screen.PostEvent(ftxui::Event::Custom);
         }
         auto _size = ftxui::Terminal::Size();
-        ftxui::Elements _rows = noam::render_markdown_lines(_content, std::max(_size.dimx, 1));
-        _row_count = static_cast<int>(_rows.size());
-        int _page = std::max(_size.dimy, 1);
-        _top = std::clamp(_top, 0, std::max(_row_count - _page, 0));
-        // Drop the rows above the top one, so the first visible row is the
-        // first row of the frame.
-        _rows.erase(_rows.begin(), _rows.begin() + _top);
-        return ftxui::vbox(std::move(_rows)) | ftxui::yframe | ftxui::flex;
+        return ftxui::vbox(_pager.rows(_size.dimx, _size.dimy)) | ftxui::flex;
     });
 
     auto _root = ftxui::CatchEvent(_view, [&](ftxui::Event _event) {
         int _page = std::max(ftxui::Terminal::Size().dimy - 1, 1);
-        if (_event == ftxui::Event::ArrowUp) { --_top; }
-        else if (_event == ftxui::Event::ArrowDown) { ++_top; }
-        else if (_event == ftxui::Event::PageUp) { _top -= _page; }
+        if (_event == ftxui::Event::ArrowUp) { _pager.scroll(-1); }
+        else if (_event == ftxui::Event::ArrowDown) { _pager.scroll(1); }
+        else if (_event == ftxui::Event::PageUp) { _pager.scroll(-_page); }
         else if (_event == ftxui::Event::PageDown || _event == ftxui::Event::Character(' ')) {
-            _top += _page;
+            _pager.scroll(_page);
         }
-        else if (_event == ftxui::Event::Home) { _top = 0; }
-        else if (_event == ftxui::Event::End) { _top = _row_count; }
+        else if (_event == ftxui::Event::Home) { _pager.home(); }
+        else if (_event == ftxui::Event::End) { _pager.end(); }
         else if (_event == ftxui::Event::Character('q') || _event == ftxui::Event::Escape) {
             _screen.Exit();
         }

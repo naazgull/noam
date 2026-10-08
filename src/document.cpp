@@ -39,9 +39,14 @@ auto noam::load_document(std::string const& _location) -> std::string {
                       _reply->status());
                 }
                 else if (_reply->status() >= 400) {
+                    std::ostringstream _oss;
+                    _oss << _request << "\n\n" << _reply << std::flush;
                     return std::format(
-                      "\n**unable to fetch content, server replied with an HTTP status of `{}`.**",
-                      _reply->status());
+                      "\n**unable to fetch content from `{}`, server replied with an HTTP "
+                      "status of `{}`:**\n```\n{}\n```\n",
+                      _location,
+                      _reply->status(),
+                      _oss.str());
                 }
             }
         }
