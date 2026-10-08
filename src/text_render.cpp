@@ -377,9 +377,15 @@ constexpr char MARKDOWN_HIGHLIGHTS_QUERY[] = R"scm(
 (atx_heading (atx_h4_marker) @_hidden_marker)
 (atx_heading (atx_h5_marker) @_hidden_marker)
 (atx_heading (atx_h6_marker) @_hidden_marker)
-(atx_heading heading_content: (inline) @markup.heading)
+(atx_heading (atx_h1_marker) heading_content: (inline) @markup.heading.1)
+(atx_heading (atx_h2_marker) heading_content: (inline) @markup.heading.2)
+(atx_heading (atx_h3_marker) heading_content: (inline) @markup.heading.3)
+(atx_heading (atx_h4_marker) heading_content: (inline) @markup.heading.4)
+(atx_heading (atx_h5_marker) heading_content: (inline) @markup.heading.5)
+(atx_heading (atx_h6_marker) heading_content: (inline) @markup.heading.6)
 
-(setext_heading heading_content: (paragraph (inline)) @markup.heading)
+(setext_heading heading_content: (paragraph (inline)) @markup.heading.1 (setext_h1_underline))
+(setext_heading heading_content: (paragraph (inline)) @markup.heading.2 (setext_h2_underline))
 (setext_heading (setext_h1_underline) @_hidden)
 (setext_heading (setext_h2_underline) @_hidden)
 
@@ -410,11 +416,11 @@ constexpr char MARKDOWN_HIGHLIGHTS_QUERY[] = R"scm(
 // runtime from the fence's info string instead of always
 // tree-sitter-markdown-inline). The `?` on the language capture means a
 // fence with no declared language (bare ```) still matches, just without
-// @fence_lang.
+// @fence_lang; likewise an empty fence matches without @fence_content.
 constexpr char MARKDOWN_FENCED_CODE_QUERY[] = R"scm(
 (fenced_code_block
   (info_string (language) @fence_lang)?
-  (code_fence_content) @fence_content) @fence_block
+  ((code_fence_content) @fence_content)?) @fence_block
 )scm";
 
 // Locates GFM pipe tables — like MARKDOWN_FENCED_CODE_QUERY above, this
@@ -501,7 +507,7 @@ auto capture_priority(std::string const& _name) -> int {
     if (_name == "function") { return 2; }
     if (_name == "preproc") { return 2; }
     if (_name == "variable.builtin") { return 2; }
-    if (_name == "markup.heading") { return 2; }
+    if (_name.starts_with("markup.heading")) { return 2; }
     if (_name == "markup.list") { return 2; }
     if (_name == "markup.strong") { return 3; }
     if (_name == "markup.italic") { return 3; }
@@ -599,8 +605,20 @@ auto markdown_style_for_capture(std::string const& _name) -> ftxui::Decorator {
     if (_name == "markup.link") {
         return ftxui::color(noam::theme().__syntax.__markup_link) | ftxui::underlined;
     }
-    if (_name == "markup.heading") {
-        return ftxui::color(noam::theme().__syntax.__markup_heading) | ftxui::bold;
+    if (_name.starts_with("markup.heading")) {
+        // "markup.heading.N" is a level-N heading, styled with that level's color.
+        auto const& _syntax = noam::theme().__syntax;
+        std::array<ftxui::Color, 6> const _levels{ _syntax.__markup_heading_1,
+                                                   _syntax.__markup_heading_2,
+                                                   _syntax.__markup_heading_3,
+                                                   _syntax.__markup_heading_4,
+                                                   _syntax.__markup_heading_5,
+                                                   _syntax.__markup_heading_6 };
+        size_t _level = _name.size() == sizeof("markup.heading.N") - 1
+                          ? static_cast<size_t>(_name.back() - '1')
+                          : _levels.size();
+        return ftxui::color(_level < _levels.size() ? _levels[_level] : _syntax.__markup_heading) |
+               ftxui::bold;
     }
     if (_name == "markup.list") {
         return ftxui::color(noam::theme().__syntax.__punctuation_special);
@@ -1043,6 +1061,7 @@ struct fenced_code_range {
     uint32_t __block_start,
       __block_end; // byte range of the whole fenced_code_block, delimiters included
     uint32_t __content_start, __content_end; // byte range of code_fence_content, within _content
+                                             // (empty, at __block_start, for an empty block)
     std::optional<language> __lang;
 };
 
@@ -1108,7 +1127,11 @@ auto find_fenced_code_blocks(std::string const& _content) -> std::vector<fenced_
                 _range.__lang = language_for_fence_name(_source.substr(_s, _e - _s));
             }
         }
-        if (_have_content) { _blocks.push_back(_range); }
+        if (!_have_content) {
+            _range.__content_start = _range.__block_start;
+            _range.__content_end = _range.__block_start;
+        }
+        _blocks.push_back(_range);
     }
     return _blocks;
 }
@@ -1333,6 +1356,7 @@ auto strip_continuation(std::string const& _line) -> std::string {
 struct setext_heading_range {
     uint32_t __block_start, __block_end;     // whole setext_heading, underline included
     uint32_t __content_start, __content_end; // the heading text (its paragraph)
+    int __level = 1;                         // 1 for a `===` underline, 2 for `---`
 };
 
 // Parses the whole `_content` once to find setext headings — same one-shot
@@ -1378,6 +1402,13 @@ auto find_setext_headings(std::string const& _content) -> std::vector<setext_hea
             if (_name == "heading") {
                 _range.__block_start = ts_node_start_byte(_node);
                 _range.__block_end = ts_node_end_byte(_node);
+                uint32_t _n = ts_node_named_child_count(_node);
+                for (uint32_t _c = 0; _c < _n; ++_c) {
+                    if (std::string_view{ ts_node_type(ts_node_named_child(_node, _c)) } ==
+                        "setext_h2_underline") {
+                        _range.__level = 2;
+                    }
+                }
             }
             else {
                 _range.__content_start = ts_node_start_byte(_node);
@@ -1419,7 +1450,7 @@ auto find_setext_headings(std::string const& _content) -> std::vector<setext_hea
         }
         uint32_t _text_end = static_cast<uint32_t>(_eol);
         if (_text_end > _item_start && _content[_text_end - 1] == '\r') { --_text_end; }
-        _headings.push_back({ _item_start, ts_node_end_byte(_next), _item_start, _text_end });
+        _headings.push_back({ _item_start, ts_node_end_byte(_next), _item_start, _text_end, 2 });
     }
     return _headings;
 }
@@ -1697,7 +1728,7 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
         }
 
         // Start of a setext heading (text underlined by `===`/`---`)? Render
-        // its text as one heading line — with an atx marker in front, so the
+        // its text as one heading line — with an atx marker of its level in front, so the
         // line parse styles it as a heading (and hides the marker) — and skip
         // the underline instead of rendering it as literal text.
         size_t _setext_eol = _content.find('\n', _start);
@@ -1725,8 +1756,9 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
                 if (_raw_nl == std::string::npos) { break; }
                 _pos = _raw_nl + 1;
             }
-            std::string _line =
-              _content.substr(_start, _setext->__block_start - _start) + "# " + _text;
+            std::string _line = _content.substr(_start, _setext->__block_start - _start) +
+                                std::string(static_cast<size_t>(_setext->__level), '#') + " " +
+                                _text;
             for (auto& _row : render_markdown_paragraph(_line, _width, block_quote_depth(_line))) {
                 _lines.push_back(std::move(_row));
             }
@@ -1760,6 +1792,12 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
         }
         if (_opening != nullptr) {
             _lines.push_back(rule_element(_width, noam::theme().__syntax.__comment, "-"));
+            // An empty block has no content to render: close it right away.
+            if (_opening->__content_start == _opening->__content_end) {
+                _lines.push_back(rule_element(_width, noam::theme().__syntax.__comment, "-"));
+                _start = _opening->__block_end;
+                continue;
+            }
             _start = _opening->__content_start;
             continue;
         }
@@ -1812,17 +1850,26 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
             // re-visit and re-render lines already covered here.
             std::string _code = _content.substr(_fence->__content_start,
                                                 _fence->__content_end - _fence->__content_start);
+            // Every content row gets the fenced-block background, grown to the
+            // full width so the block reads as one shaded area (the rules
+            // above and below stay outside it).
+            auto _shade = [](ftxui::Element _row) {
+                return ftxui::bgcolor(noam::theme().__syntax.__fenced_block_background,
+                                      std::move(_row) | ftxui::xflex_grow);
+            };
             if (_fence->__lang.has_value()) {
                 for (auto& _row : highlight_fenced_code_block(_code, *_fence->__lang, _width)) {
-                    _lines.push_back(std::move(_row));
+                    _lines.push_back(_shade(std::move(_row)));
                 }
             }
             else {
+                // The content ends with the last line's newline, which closes
+                // that line rather than starting an empty one.
                 size_t _pos = 0;
-                while (_pos <= _code.size()) {
+                while (_pos < _code.size()) {
                     size_t _code_nl = _code.find('\n', _pos);
-                    _lines.push_back(ftxui::text(_code.substr(
-                      _pos, _code_nl == std::string::npos ? std::string::npos : _code_nl - _pos)));
+                    _lines.push_back(_shade(ftxui::text(_code.substr(
+                      _pos, _code_nl == std::string::npos ? std::string::npos : _code_nl - _pos))));
                     if (_code_nl == std::string::npos) { break; }
                     _pos = _code_nl + 1;
                 }

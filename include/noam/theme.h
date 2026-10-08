@@ -9,6 +9,7 @@ struct syntax_theme {
     ftxui::Color __comment = ftxui::Color::White;
     ftxui::Color __quote_bar = ftxui::Color::White;             // Block-quote left bar glyph
     ftxui::Color __quote_background = ftxui::Color(50, 50, 50); // Block-quote row background
+    ftxui::Color __fenced_block_background = ftxui::Color::Default; // Fenced block row background
     ftxui::Color __escape = ftxui::Color::White;
     ftxui::Color __string_special_key = ftxui::Color::White;
     ftxui::Color __string_special = ftxui::Color::White;
@@ -23,6 +24,12 @@ struct syntax_theme {
     ftxui::Color __markup_code = ftxui::Color::White;
     ftxui::Color __markup_link = ftxui::Color::White;
     ftxui::Color __markup_heading = ftxui::Color::White;
+    ftxui::Color __markup_heading_1 = ftxui::Color::White; // Heading levels 1-6
+    ftxui::Color __markup_heading_2 = ftxui::Color::White;
+    ftxui::Color __markup_heading_3 = ftxui::Color::White;
+    ftxui::Color __markup_heading_4 = ftxui::Color::White;
+    ftxui::Color __markup_heading_5 = ftxui::Color::White;
+    ftxui::Color __markup_heading_6 = ftxui::Color::White;
     ftxui::Color __markup_ruler = ftxui::Color::White;
     ftxui::Color __type = ftxui::Color::White;
     ftxui::Color __namespace = ftxui::Color::White;

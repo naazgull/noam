@@ -19,6 +19,8 @@ auto noam::set_theme(zpt::json const& _theme) -> void {
       noam::render_color(_theme("syntax")("quote_bar"), ___theme.__syntax.__quote_bar);
     ___theme.__syntax.__quote_background = noam::render_color(_theme("syntax")("quote_background"),
                                                               ___theme.__syntax.__quote_background);
+    ___theme.__syntax.__fenced_block_background = noam::render_color(
+      _theme("syntax")("fenced_block_background"), ___theme.__syntax.__fenced_block_background);
     ___theme.__syntax.__escape =
       noam::render_color(_theme("syntax")("escape"), ___theme.__syntax.__escape);
     ___theme.__syntax.__string_special_key = noam::render_color(
@@ -47,6 +49,18 @@ auto noam::set_theme(zpt::json const& _theme) -> void {
       noam::render_color(_theme("syntax")("markup_link"), ___theme.__syntax.__markup_link);
     ___theme.__syntax.__markup_heading =
       noam::render_color(_theme("syntax")("markup_heading"), ___theme.__syntax.__markup_heading);
+    ___theme.__syntax.__markup_heading_1 = noam::render_color(
+      _theme("syntax")("markup_heading_1"), ___theme.__syntax.__markup_heading_1);
+    ___theme.__syntax.__markup_heading_2 = noam::render_color(
+      _theme("syntax")("markup_heading_2"), ___theme.__syntax.__markup_heading_2);
+    ___theme.__syntax.__markup_heading_3 = noam::render_color(
+      _theme("syntax")("markup_heading_3"), ___theme.__syntax.__markup_heading_3);
+    ___theme.__syntax.__markup_heading_4 = noam::render_color(
+      _theme("syntax")("markup_heading_4"), ___theme.__syntax.__markup_heading_4);
+    ___theme.__syntax.__markup_heading_5 = noam::render_color(
+      _theme("syntax")("markup_heading_5"), ___theme.__syntax.__markup_heading_5);
+    ___theme.__syntax.__markup_heading_6 = noam::render_color(
+      _theme("syntax")("markup_heading_6"), ___theme.__syntax.__markup_heading_6);
     ___theme.__syntax.__markup_ruler =
       noam::render_color(_theme("syntax")("markup_ruler"), ___theme.__syntax.__markup_ruler);
     ___theme.__syntax.__type =
