@@ -828,8 +828,12 @@ auto highlight_fenced_code_block(std::string const& _code, language _lang, int _
     size_t _i = 0;
     while (_i < _code.size()) {
         if (_code[_i] == '\n') {
-            _rows.push_back(ftxui::hbox(std::move(_current_row)) |
-                            ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, std::max(_width, 1)));
+            // An empty hbox is zero rows tall; a blank code line must still
+            // take up its one row.
+            _rows.push_back(_current_row.empty()
+                              ? ftxui::text("")
+                              : ftxui::hbox(std::move(_current_row)) |
+                                  ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, std::max(_width, 1)));
             _current_row = ftxui::Elements{};
             ++_i;
             continue;
