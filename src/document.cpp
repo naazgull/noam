@@ -66,7 +66,9 @@ auto noam::load_document(std::string const& _location) -> std::string {
     else { return "\nnoam only retrieves local or HTTP served files"; }
 
     std::map<std::string, std::string>::iterator _found;
-    if (_path.extension() == "" || _path.extension() == ".md") { return _content; }
+    if (_path.extension() == "" || _path.extension() == ".md" || _path.extension() == ".markdown") {
+        return _content;
+    }
     else if ((_found = ___supported_blocks.find(_path.extension())) != ___supported_blocks.end()) {
         return std::format("```{}\n{}\n```", _found->second, _content);
     }
