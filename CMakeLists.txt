@@ -74,6 +74,9 @@ include(cmake/tree-sitter-lua.cmake)
 include(cmake/tree-sitter-python.cmake)
 include(cmake/tree-sitter-rust.cmake)
 include(cmake/tree-sitter-diff.cmake)
+include(cmake/tree-sitter-bash.cmake)
+include(cmake/tree-sitter-sql.cmake)
+include(cmake/tree-sitter-fish.cmake)
 include(cmake/tree-sitter-markdown.cmake)
 
 set(NOAM_TREE_SITTER_GRAMMARS
@@ -83,6 +86,9 @@ set(NOAM_TREE_SITTER_GRAMMARS
   tree-sitter-python-grammar
   tree-sitter-rust-grammar
   tree-sitter-diff-grammar
+  tree-sitter-bash-grammar
+  tree-sitter-sql-grammar
+  tree-sitter-fish-grammar
   tree-sitter-markdown-grammar
   tree-sitter-markdown-inline-grammar
 )

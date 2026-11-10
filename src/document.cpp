@@ -5,9 +5,10 @@
 
 auto noam::load_document(std::string const& _location) -> std::string {
     static std::map<std::string, std::string> ___supported_blocks{
-        { ".json", "json" }, { ".cpp", "c++" }, { ".c", "c++" },
-        { ".h", "c++" },     { ".hpp", "c++" }, { ".lua", "lua" },
-        { ".py", "python" }, { ".rs", "rust" }, { ".diff", "diff" }
+        { ".json", "json" }, { ".cpp", "c++" },  { ".c", "c++" },     { ".h", "c++" },
+        { ".hpp", "c++" },   { ".lua", "lua" },  { ".py", "python" }, { ".rs", "rust" },
+        { ".diff", "diff" }, { ".sql", "sql" },  { ".sh", "bash" },   { ".bash", "bash" },
+        { ".zsh", "bash" },  { ".fish", "fish" }
     };
 
     auto _normalized = _location;
@@ -66,11 +67,18 @@ auto noam::load_document(std::string const& _location) -> std::string {
     else { return "\nnoam only retrieves local or HTTP served files"; }
 
     std::map<std::string, std::string>::iterator _found;
-    if (_path.extension() == "" || _path.extension() == ".md" || _path.extension() == ".markdown") {
-        return _content;
-    }
+    if (_path.extension() == ".md" || _path.extension() == ".markdown") { return _content; }
     else if ((_found = ___supported_blocks.find(_path.extension())) != ___supported_blocks.end()) {
         return std::format("```{}\n{}\n```", _found->second, _content);
     }
+    else if (_content[0] == '#' && _content[1] == '!') {
+        auto _extension = _content.substr(0, _content.find("\n"));
+        _extension = std::string{ "." } + _extension.substr(_extension.rfind("/") + 1);
+        if ((_found = ___supported_blocks.find(_extension)) != ___supported_blocks.end()) {
+            return std::format("```{}\n{}\n```", _found->second, _content);
+        }
+        return std::format("```\n{}\n```", _content);
+    }
+    else if (_path.extension() == "") { return _content; }
     else { return std::format("```\n{}\n```", _content); }
 }

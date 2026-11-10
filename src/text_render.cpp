@@ -20,6 +20,9 @@ extern "C" const TSLanguage* tree_sitter_lua(void);
 extern "C" const TSLanguage* tree_sitter_python(void);
 extern "C" const TSLanguage* tree_sitter_rust(void);
 extern "C" const TSLanguage* tree_sitter_diff(void);
+extern "C" const TSLanguage* tree_sitter_bash(void);
+extern "C" const TSLanguage* tree_sitter_sql(void);
+extern "C" const TSLanguage* tree_sitter_fish(void);
 extern "C" const TSLanguage* tree_sitter_markdown(void);
 extern "C" const TSLanguage* tree_sitter_markdown_inline(void);
 
@@ -46,6 +49,9 @@ enum class language {
     RUST,
     DIFF,
     MARKDOWN,
+    BASH,
+    SQL,
+    FISH,
 };
 
 // Every tree-sitter handle this file creates (via ts_parser_new,
@@ -357,6 +363,141 @@ reverse: (binary_hunk
   (payload) @diff.minus)
 )scm";
 
+// Hand-written against tree-sitter-bash — predicate-free, same reasoning as
+// the other fenced-language queries above: the official query flags
+// option/argument tokens with #match? and recurses into $()/`...`/expansions
+// with @embedded, neither of which this file's resolver supports, so both are
+// dropped. A script's strings, command and function names, variables,
+// keywords, comments and file descriptors are the constructs worth coloring.
+constexpr char BASH_HIGHLIGHTS_QUERY[] = R"scm(
+(string) @string
+(raw_string) @string
+(heredoc_body) @string
+(heredoc_start) @string
+
+(command_name) @function
+(function_definition name: (word) @function)
+
+(variable_name) @variable
+
+[
+  "case" "do" "done" "elif"
+  "else" "esac" "export" "fi"
+  "for" "function" "if" "in"
+  "select" "then" "unset" "until"
+  "while"
+] @keyword
+
+(comment) @comment
+
+(file_descriptor) @number
+)scm";
+
+// Hand-written against m-novikov/tree-sitter-sql (PostgreSQL flavor). The
+// shipped highlights.scm classifies type names with a #match? text predicate,
+// which this file's paint loop does not evaluate, so the query is flattened
+// into predicate-free rules reusing the existing capture names. The keyword
+// list matches the grammar's token text verbatim (multi-word keywords are
+// single underscored tokens here, e.g. GROUP_BY) and is copied, not
+// re-derived. A function or type name is an (identifier) that also matches
+// @variable, but @function/@type carry higher capture_priority and win
+// deterministically, so no two captures tie on a byte.
+constexpr char SQL_HIGHLIGHTS_QUERY[] = R"scm(
+(comment) @comment
+
+(string) @string
+
+(number) @number
+
+(function_call
+  function: (identifier) @function)
+
+[
+  (type)
+  (array_type)
+] @type
+
+[
+  (NULL)
+  (TRUE)
+  (FALSE)
+] @constant.builtin
+
+[
+  (primary_key_constraint)
+  (unique_constraint)
+  (null_constraint)
+] @keyword
+
+[
+  "AND" "AS" "AUTO_INCREMENT" "CREATE" "CREATE_DOMAIN"
+  "CREATE_OR_REPLACE_FUNCTION" "CREATE_SCHEMA" "CREATE_TYPE" "DATABASE"
+  "FROM" "GRANT" "GROUP_BY" "IF_NOT_EXISTS" "INDEX" "IN" "INNER"
+  "INSERT" "INTO" "JOIN" "LANGUAGE" "LEFT" "LOCAL" "NOT" "ON" "OR"
+  "ORDER_BY" "OUTER" "PRIMARY_KEY" "PUBLIC" "RETURNS" "SCHEMA" "SELECT"
+  "SESSION" "SET" "TABLE" "TEMPORARY" "TIME_ZONE" "TO" "UNIQUE" "UPDATE"
+  "USAGE" "VALUES" "WHERE" "WITH" "WITHOUT"
+] @keyword
+
+(identifier) @variable
+)scm";
+
+constexpr char FISH_HIGHLIGHTS_QUERY[] = R"scm(
+[(double_quote_string) (single_quote_string)] @string
+
+(escape_sequence) @escape
+
+(comment) @comment
+
+[(integer) (float)] @number
+
+[
+  "&&"
+  "||"
+  "|"
+  "&|"
+  "2>|"
+  "&"
+  ".."
+  (direction)
+  (stream_redirect)
+] @punctuation.special
+
+(variable_expansion) @constant
+
+(command_substitution "$" @punctuation.special)
+(command_substitution ["(" ")"] @punctuation.special)
+(list_element_access  ["[" "]"] @punctuation.special)
+(brace_expansion      ["{" "}"] @punctuation.special)
+(begin_statement      ["{" "}"] @punctuation.special)
+
+"," @punctuation.special
+
+(function_definition name: [(word) (concatenation)] @function)
+
+(command name: (word) @function)
+
+[
+  "switch"
+  "case"
+  "in"
+  "begin"
+  "function"
+  "if"
+  "else"
+  "end"
+  "while"
+  "for"
+  "not"
+  "!"
+  "and"
+  "or"
+  "return"
+  (break)
+  (continue)
+] @keyword
+)scm";
+
 // Hand-written against tree-sitter-markdown. @_inline tags every (inline)
 // node (paragraph bodies, heading content, ...) for the paint loop to
 // re-parse with the inline grammar. @_hidden marks bytes to omit entirely
@@ -537,7 +678,7 @@ struct language_profile {
     ts_query_ptr __query{ nullptr, ts_query_delete };    // lazily created on first use
 };
 
-std::array<language_profile, 7> ___language_profiles = { {
+std::array<language_profile, 10> ___language_profiles = { {
   { "json", tree_sitter_json, JSON_HIGHLIGHTS_QUERY, sizeof(JSON_HIGHLIGHTS_QUERY) - 1 },
   { "cpp", tree_sitter_cpp, CPP_HIGHLIGHTS_QUERY, sizeof(CPP_HIGHLIGHTS_QUERY) - 1 },
   { "lua", tree_sitter_lua, LUA_HIGHLIGHTS_QUERY, sizeof(LUA_HIGHLIGHTS_QUERY) - 1 },
@@ -548,6 +689,9 @@ std::array<language_profile, 7> ___language_profiles = { {
     tree_sitter_markdown,
     MARKDOWN_HIGHLIGHTS_QUERY,
     sizeof(MARKDOWN_HIGHLIGHTS_QUERY) - 1 },
+  { "bash", tree_sitter_bash, BASH_HIGHLIGHTS_QUERY, sizeof(BASH_HIGHLIGHTS_QUERY) - 1 },
+  { "sql", tree_sitter_sql, SQL_HIGHLIGHTS_QUERY, sizeof(SQL_HIGHLIGHTS_QUERY) - 1 },
+  { "fish", tree_sitter_fish, FISH_HIGHLIGHTS_QUERY, sizeof(FISH_HIGHLIGHTS_QUERY) - 1 },
 } };
 
 auto profile_for(language _lang) -> language_profile& {
@@ -739,6 +883,13 @@ auto language_for_fence_name(std::string const& _name) -> std::optional<language
     if (_name == "python" || _name == "py") { return language::PYTHON; }
     if (_name == "rust" || _name == "rs") { return language::RUST; }
     if (_name == "diff" || _name == "patch") { return language::DIFF; }
+    if (_name == "bash" || _name == "sh" || _name == "shell") {
+        return language::BASH;
+    }
+    if (_name == "sql" || _name == "postgres" || _name == "postgresql") {
+        return language::SQL;
+    }
+    if (_name == "fish") { return language::FISH; }
     return std::nullopt;
 }
 
