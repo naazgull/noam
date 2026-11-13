@@ -7,7 +7,7 @@
 #include <iostream>
 #include <noam/document.h>
 #include <noam/pager.h>
-#include <noam/theme.h>
+#include <noam/theme_json.h>
 #include <string>
 #include <zapata/json.h>
 

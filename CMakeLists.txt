@@ -77,6 +77,7 @@ include(cmake/tree-sitter-diff.cmake)
 include(cmake/tree-sitter-bash.cmake)
 include(cmake/tree-sitter-sql.cmake)
 include(cmake/tree-sitter-fish.cmake)
+include(cmake/tree-sitter-prolog.cmake)
 include(cmake/tree-sitter-markdown.cmake)
 
 set(NOAM_TREE_SITTER_GRAMMARS
@@ -89,16 +90,38 @@ set(NOAM_TREE_SITTER_GRAMMARS
   tree-sitter-bash-grammar
   tree-sitter-sql-grammar
   tree-sitter-fish-grammar
+  tree-sitter-prolog-grammar
   tree-sitter-markdown-grammar
   tree-sitter-markdown-inline-grammar
+)
+
+add_library(noam-markdown SHARED
+  src/pager.cpp
+  src/text_render.cpp
+  src/theme.cpp
+)
+add_dependencies(noam-markdown
+  ftxui
+)
+target_include_directories(noam-markdown
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(noam-markdown
+  PUBLIC
+    ftxui-component
+    ftxui-dom
+    ftxui-screen
+    Threads::Threads
+  PRIVATE
+    tree-sitter-lib
+    ${NOAM_TREE_SITTER_GRAMMARS}
 )
 
 add_executable(noam
   src/document.cpp
   src/main.cpp
-  src/pager.cpp
-  src/text_render.cpp
-  src/theme.cpp
+  src/theme_json.cpp
 )
 add_dependencies(noam
   ftxui
@@ -109,12 +132,7 @@ target_include_directories(noam
 )
 target_link_libraries(noam
   PRIVATE
-    ftxui-component
-    ftxui-dom
-    ftxui-screen
-    Threads::Threads
-    tree-sitter-lib
-    ${NOAM_TREE_SITTER_GRAMMARS}
+    noam-markdown
     zapata-base
     zapata-net-http
     zapata-ontology
@@ -126,6 +144,20 @@ target_link_libraries(noam
 install(TARGETS noam
   RUNTIME
     DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(TARGETS noam-markdown
+  LIBRARY
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+install(FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/noam/text_render.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/noam/theme.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/noam/pager.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/noam
+)
+install(FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/noam-markdownConfig.cmake
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/noam-markdown
 )
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/data/noam
   DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}

@@ -23,6 +23,7 @@ extern "C" const TSLanguage* tree_sitter_diff(void);
 extern "C" const TSLanguage* tree_sitter_bash(void);
 extern "C" const TSLanguage* tree_sitter_sql(void);
 extern "C" const TSLanguage* tree_sitter_fish(void);
+extern "C" const TSLanguage* tree_sitter_prolog(void);
 extern "C" const TSLanguage* tree_sitter_markdown(void);
 extern "C" const TSLanguage* tree_sitter_markdown_inline(void);
 
@@ -52,6 +53,7 @@ enum class language {
     BASH,
     SQL,
     FISH,
+    PROLOG,
 };
 
 // Every tree-sitter handle this file creates (via ts_parser_new,
@@ -498,6 +500,27 @@ constexpr char FISH_HIGHLIGHTS_QUERY[] = R"scm(
 ] @keyword
 )scm";
 
+constexpr char PROLOG_HIGHLIGHTS_QUERY[] = R"scm(
+; comments
+(comment) @comment
+
+; strings: double-quoted strings and single-quoted quoted atoms
+(string) @string
+(quoted_atom) @string
+
+; numbers
+(number) @number
+
+; variables (uppercase / leading-underscore identifiers)
+(variable) @variable
+
+; atoms (predicate names and constants)
+(atom) @constant
+
+; operators (is, =, :-, ;, !, etc.)
+(operator) @keyword
+)scm";
+
 // Hand-written against tree-sitter-markdown. @_inline tags every (inline)
 // node (paragraph bodies, heading content, ...) for the paint loop to
 // re-parse with the inline grammar. @_hidden marks bytes to omit entirely
@@ -678,7 +701,7 @@ struct language_profile {
     ts_query_ptr __query{ nullptr, ts_query_delete };    // lazily created on first use
 };
 
-std::array<language_profile, 10> ___language_profiles = { {
+std::array<language_profile, 11> ___language_profiles = { {
   { "json", tree_sitter_json, JSON_HIGHLIGHTS_QUERY, sizeof(JSON_HIGHLIGHTS_QUERY) - 1 },
   { "cpp", tree_sitter_cpp, CPP_HIGHLIGHTS_QUERY, sizeof(CPP_HIGHLIGHTS_QUERY) - 1 },
   { "lua", tree_sitter_lua, LUA_HIGHLIGHTS_QUERY, sizeof(LUA_HIGHLIGHTS_QUERY) - 1 },
@@ -692,6 +715,7 @@ std::array<language_profile, 10> ___language_profiles = { {
   { "bash", tree_sitter_bash, BASH_HIGHLIGHTS_QUERY, sizeof(BASH_HIGHLIGHTS_QUERY) - 1 },
   { "sql", tree_sitter_sql, SQL_HIGHLIGHTS_QUERY, sizeof(SQL_HIGHLIGHTS_QUERY) - 1 },
   { "fish", tree_sitter_fish, FISH_HIGHLIGHTS_QUERY, sizeof(FISH_HIGHLIGHTS_QUERY) - 1 },
+  { "prolog", tree_sitter_prolog, PROLOG_HIGHLIGHTS_QUERY, sizeof(PROLOG_HIGHLIGHTS_QUERY) - 1 },
 } };
 
 auto profile_for(language _lang) -> language_profile& {
@@ -890,6 +914,7 @@ auto language_for_fence_name(std::string const& _name) -> std::optional<language
         return language::SQL;
     }
     if (_name == "fish") { return language::FISH; }
+    if (_name == "prolog") { return language::PROLOG; }
     return std::nullopt;
 }
 

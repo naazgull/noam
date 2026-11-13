@@ -32,7 +32,7 @@ auto noam::load_document(std::string const& _location) -> std::string {
     }
     else if (_uri("scheme") == "http" || _uri("scheme") == "https") {
         try {
-            auto _request = zpt::allocate_message<zpt::http::basic_request>();
+            auto _request = zpt::make_message<zpt::http::basic_request>();
             _request //
               ->performative(zpt::Get)
               .uri(_normalized);

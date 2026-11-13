@@ -1,7 +1,6 @@
 #pragma once
 
 #include <ftxui/screen/color.hpp>
-#include <zapata/json.h>
 
 namespace noam {
 
@@ -51,8 +50,5 @@ struct noam_theme {
 // colors can be replaced at runtime (e.g. from a theme file).
 auto theme() -> noam_theme&;
 auto set_theme(noam_theme _theme) -> void;
-// Reads the "syntax" section of `_theme`; entries left out keep their value.
-auto set_theme(zpt::json const& _theme) -> void;
-auto render_color(zpt::json const& _color, ftxui::Color const& _default) -> ftxui::Color;
 
 } // namespace noam
