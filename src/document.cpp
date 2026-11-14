@@ -5,10 +5,11 @@
 
 auto noam::load_document(std::string const& _location) -> std::string {
     static std::map<std::string, std::string> ___supported_blocks{
-        { ".json", "json" }, { ".cpp", "c++" },  { ".c", "c++" },     { ".h", "c++" },
-        { ".hpp", "c++" },   { ".lua", "lua" },  { ".py", "python" }, { ".rs", "rust" },
-        { ".diff", "diff" }, { ".sql", "sql" },  { ".sh", "bash" },   { ".bash", "bash" },
-        { ".zsh", "bash" },  { ".fish", "fish" }
+        { ".json", "json" },   { ".cpp", "c++" },   { ".c", "c++" },     { ".h", "c++" },
+        { ".hpp", "c++" },     { ".lua", "lua" },   { ".py", "python" }, { ".rs", "rust" },
+        { ".diff", "diff" },   { ".sql", "sql" },   { ".sh", "bash" },   { ".bash", "bash" },
+        { ".zsh", "bash" },    { ".fish", "fish" }, { ".pl", "prolog" }, { ".prolog", "prolog" },
+        { ".swipl", "prolog" }
     };
 
     auto _normalized = _location;

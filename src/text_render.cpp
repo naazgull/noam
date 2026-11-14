@@ -514,8 +514,12 @@ constexpr char PROLOG_HIGHLIGHTS_QUERY[] = R"scm(
 ; variables (uppercase / leading-underscore identifiers)
 (variable) @variable
 
-; atoms (predicate names and constants)
+; atoms (arguments and constants)
 (atom) @constant
+
+; predicate names: a functional notation's name, or a bare-atom fact
+(functional_notation name: (atom) @function)
+(clause_term (atomic (atom) @function) (end))
 
 ; operators (is, =, :-, ;, !, etc.)
 (operator) @keyword
@@ -668,7 +672,7 @@ auto capture_priority(std::string const& _name) -> int {
     if (_name == "number") { return 2; }
     if (_name == "type") { return 2; }
     if (_name == "namespace") { return 2; }
-    if (_name == "function") { return 2; }
+    if (_name == "function") { return 3; }
     if (_name == "preproc") { return 2; }
     if (_name == "variable.builtin") { return 2; }
     if (_name.starts_with("markup.heading")) { return 2; }

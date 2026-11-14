@@ -64,6 +64,11 @@ endif()
 
 find_package(Threads REQUIRED)
 
+include_directories(
+  SYSTEM
+    ${CMAKE_INSTALL_PREFIX}/include
+)
+
 include(ExternalProject)
 include(GNUInstallDirs)
 if(NOT NOAM_MARKDOWN_ONLY)

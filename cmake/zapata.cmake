@@ -14,11 +14,6 @@ ExternalProject_Add(zapata
     -DWITH_ALLOCATOR_DEBUGGING=${WITH_ALLOCATOR_DEBUGGING}
 )
 
-include_directories(
-  SYSTEM
-    ${CMAKE_INSTALL_PREFIX}/include
-)
-
 set(ZPT_MODULES
   zapata-base
   zapata-bridge-base
