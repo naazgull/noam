@@ -5,6 +5,7 @@ project(noam VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(NOAM_MARKDOWN_ONLY "Build only noam-markdown" OFF)
 option(WITH_ASAN "Enable address sanitizer" OFF)
 option(WITH_UBSAN "Enable undefined-behavior sanitizer" OFF)
 option(WITH_EXCEPTION_PROPAGATION
@@ -12,14 +13,14 @@ option(WITH_EXCEPTION_PROPAGATION
 option(WITH_ALLOCATOR_DEBUGGING
   "Enable allocator debugging by keeping the list of allocated chunks (debugging)" OFF)
 
-IF(WITH_ASAN)
+if(WITH_ASAN)
   add_compile_options(-fsanitize=address)
   add_link_options(-fsanitize=address)
-ENDIF()
-IF(WITH_UBSAN)
+endif()
+if(WITH_UBSAN)
   add_compile_options(-fsanitize=undefined)
   add_link_options(-fsanitize=undefined)
-ENDIF()
+endif()
 if(WITH_EXCEPTION_PROPAGATION)
   add_compile_definitions(PROPAGATE_EXCEPTION)
 endif()
@@ -65,7 +66,9 @@ find_package(Threads REQUIRED)
 
 include(ExternalProject)
 include(GNUInstallDirs)
-include(cmake/zapata.cmake)
+if(NOT NOAM_MARKDOWN_ONLY)
+  include(cmake/zapata.cmake)
+endif()
 include(cmake/ftxui.cmake)
 include(cmake/tree-sitter.cmake)
 include(cmake/tree-sitter-json.cmake)
@@ -118,6 +121,7 @@ target_link_libraries(noam-markdown
     ${NOAM_TREE_SITTER_GRAMMARS}
 )
 
+if(NOT NOAM_MARKDOWN_ONLY)
 add_executable(noam
   src/document.cpp
   src/main.cpp
@@ -145,6 +149,8 @@ install(TARGETS noam
   RUNTIME
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+endif()
+
 install(TARGETS noam-markdown
   LIBRARY
     DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -159,10 +165,12 @@ install(FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/cmake/noam-markdownConfig.cmake
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/noam-markdown
 )
+if(NOT NOAM_MARKDOWN_ONLY)
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/data/noam
   DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}
   FILES_MATCHING PATTERN "*.*"
 )
+endif()
 
 # ------------------------------------------------------------------------
 # TARGET: uninstall
