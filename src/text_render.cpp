@@ -28,12 +28,28 @@ extern "C" const TSLanguage* tree_sitter_markdown(void);
 extern "C" const TSLanguage* tree_sitter_markdown_inline(void);
 
 namespace {
-// A full-width horizontal rule of `_separator` glyphs in `_color`.
-auto rule_element(int _width, ftxui::Color const& _color, std::string const& _separator = "─")
-  -> ftxui::Element {
+// A full-width horizontal rule of `_separator` glyphs in `_color`. A non-empty
+// `_label` sits at the rule's end behind one space, as long as that leaves at
+// least `_min_rule_cells` cells of rule; a label that doesn't fit is dropped
+// rather than shortened. With or without it the rule spans exactly `_width`
+// cells.
+auto rule_element(int _width,
+                  ftxui::Color const& _color,
+                  std::string const& _separator = "─",
+                  std::string const& _label = {}) -> ftxui::Element {
+    constexpr int _min_rule_cells = 2;
+    int _label_cells = 0;
+    if (!_label.empty()) {
+        _label_cells = ftxui::string_width(_label) + 1; // the space before it
+        if (_width - _label_cells < _min_rule_cells) { _label_cells = 0; }
+    }
     std::string _line;
     _line.reserve(static_cast<size_t>(_width) * 3);
-    for (int _i = 0; _i < _width; ++_i) { _line += _separator; }
+    for (int _i = 0; _i < _width - _label_cells; ++_i) { _line += _separator; }
+    if (_label_cells > 0) {
+        _line += " ";
+        _line += _label;
+    }
     return ftxui::text(_line) | ftxui::color(_color);
 }
 
@@ -724,6 +740,27 @@ std::array<language_profile, 11> ___language_profiles = { {
 
 auto profile_for(language _lang) -> language_profile& {
     return ___language_profiles[static_cast<size_t>(_lang)];
+}
+
+// Reader-facing name of a grammar: the conventional spelling of the language,
+// its acronyms in full. Shown at the end of a fenced code block's opening
+// border, where language_profile::__name holds the tree-sitter identifier
+// instead.
+auto language_display_name(language _lang) -> char const* {
+    switch (_lang) {
+        case language::JSON: return "JSON";
+        case language::CPP: return "C++";
+        case language::LUA: return "Lua";
+        case language::PYTHON: return "Python";
+        case language::RUST: return "Rust";
+        case language::DIFF: return "Diff";
+        case language::MARKDOWN: return "Markdown";
+        case language::BASH: return "Bash";
+        case language::SQL: return "SQL";
+        case language::FISH: return "Fish";
+        case language::PROLOG: return "Prolog";
+    }
+    return ""; // every enumerator returns above
 }
 
 auto ensure_profile_ready(language_profile& _profile) -> void {
@@ -2061,7 +2098,14 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
             }
         }
         if (_opening != nullptr) {
-            _lines.push_back(rule_element(_width, noam::theme().__syntax.__comment, "-"));
+            // The grammar highlighting this block's content is named at the end
+            // of the opening border; a fence with no recognized language leaves
+            // that border bare.
+            std::string _grammar;
+            if (_opening->__lang.has_value()) {
+                _grammar = language_display_name(*_opening->__lang);
+            }
+            _lines.push_back(rule_element(_width, noam::theme().__syntax.__comment, "-", _grammar));
             // An empty block has no content to render: close it right away.
             if (_opening->__content_start == _opening->__content_end) {
                 _lines.push_back(rule_element(_width, noam::theme().__syntax.__comment, "-"));
