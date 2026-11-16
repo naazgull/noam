@@ -4,6 +4,7 @@ project(noam VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_COLOR_DIAGNOSTICS ON)
 
 option(NOAM_MARKDOWN_ONLY "Build only noam-markdown" OFF)
 option(WITH_ASAN "Enable address sanitizer" OFF)

@@ -32,7 +32,9 @@ auto block_starts(std::string const& _content) -> std::vector<size_t> {
         std::string_view _type{ ts_node_type(_node) };
         if (_type == "document" || _type == "section") {
             uint32_t _n = ts_node_named_child_count(_node);
-            for (uint32_t _c = 0; _c < _n; ++_c) { _stack.push_back(ts_node_named_child(_node, _c)); }
+            for (uint32_t _c = 0; _c < _n; ++_c) {
+                _stack.push_back(ts_node_named_child(_node, _c));
+            }
             continue;
         }
         if (_type == "thematic_break") { continue; }
@@ -55,10 +57,10 @@ auto split_pages(std::string const& _content, size_t _target_lines)
     size_t _lines = 0;    // source lines in [_page_start, _previous)
     for (size_t _block : block_starts(_content)) {
         if (_block <= _previous) { continue; }
-        _lines += static_cast<size_t>(
-          std::count(_content.begin() + static_cast<std::ptrdiff_t>(_previous),
-                     _content.begin() + static_cast<std::ptrdiff_t>(_block),
-                     '\n'));
+        _lines +=
+          static_cast<size_t>(std::count(_content.begin() + static_cast<std::ptrdiff_t>(_previous),
+                                         _content.begin() + static_cast<std::ptrdiff_t>(_block),
+                                         '\n'));
         _previous = _block;
         if (_lines >= _target_lines) {
             _pages.emplace_back(_page_start, _block);
@@ -96,7 +98,9 @@ auto noam::pager::rows(int _width, int _height) -> ftxui::Elements {
     int _row = 0;
     for (auto const& _page : this->__window) {
         for (auto const& _element : _page.__rows) {
-            if (_row >= this->__top && _row < this->__top + _height) { _visible.push_back(_element); }
+            if (_row >= this->__top && _row < this->__top + _height) {
+                _visible.push_back(_element);
+            }
             ++_row;
         }
     }

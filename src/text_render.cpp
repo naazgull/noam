@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/color.hpp>
@@ -638,6 +639,15 @@ constexpr char MARKDOWN_SETEXT_HEADING_QUERY[] = R"scm(
 (setext_heading heading_content: (paragraph) @content) @heading
 )scm";
 
+// Locates a YAML metadata block (Pandoc-style front matter, the grammar's
+// minus_metadata node) — structural extraction like the queries above: the
+// block renders as a header of its values alone, so its whole extent is
+// needed up front. A grammar built without the metadata extension has no
+// such node, the query then fails to compile and the block list stays empty.
+constexpr char MARKDOWN_METADATA_QUERY[] = R"scm(
+(minus_metadata) @metadata
+)scm";
+
 // Locates paragraphs — structural extraction like the queries above: a
 // paragraph's source lines are joined into one before rendering (soft
 // breaks, see render_markdown_lines), so its full extent is needed up front.
@@ -817,12 +827,10 @@ auto markdown_style_for_capture(std::string const& _name) -> ftxui::Decorator {
     if (_name.starts_with("markup.heading")) {
         // "markup.heading.N" is a level-N heading, styled with that level's color.
         auto const& _syntax = noam::theme().__syntax;
-        std::array<ftxui::Color, 6> const _levels{ _syntax.__markup_heading_1,
-                                                   _syntax.__markup_heading_2,
-                                                   _syntax.__markup_heading_3,
-                                                   _syntax.__markup_heading_4,
-                                                   _syntax.__markup_heading_5,
-                                                   _syntax.__markup_heading_6 };
+        std::array<ftxui::Color, 6> const _levels{
+            _syntax.__markup_heading_1, _syntax.__markup_heading_2, _syntax.__markup_heading_3,
+            _syntax.__markup_heading_4, _syntax.__markup_heading_5, _syntax.__markup_heading_6
+        };
         size_t _level = _name.size() == sizeof("markup.heading.N") - 1
                           ? static_cast<size_t>(_name.back() - '1')
                           : _levels.size();
@@ -948,12 +956,8 @@ auto language_for_fence_name(std::string const& _name) -> std::optional<language
     if (_name == "python" || _name == "py") { return language::PYTHON; }
     if (_name == "rust" || _name == "rs") { return language::RUST; }
     if (_name == "diff" || _name == "patch") { return language::DIFF; }
-    if (_name == "bash" || _name == "sh" || _name == "shell") {
-        return language::BASH;
-    }
-    if (_name == "sql" || _name == "postgres" || _name == "postgresql") {
-        return language::SQL;
-    }
+    if (_name == "bash" || _name == "sh" || _name == "shell") { return language::BASH; }
+    if (_name == "sql" || _name == "postgres" || _name == "postgresql") { return language::SQL; }
     if (_name == "fish") { return language::FISH; }
     if (_name == "prolog") { return language::PROLOG; }
     return std::nullopt;
@@ -1393,6 +1397,99 @@ struct fenced_code_range {
     std::optional<language> __lang;
 };
 
+// The container prefix of a fenced block nested in a block quote and/or a
+// list item: how many quote levels deep it sits, and how many cells of
+// indentation follow the quote markers before its opening delimiter.
+struct fence_prefix {
+    int __quote_depth = 0;
+    int __indent = 0;
+
+    auto cells() const -> int { return __quote_depth * 2 + __indent; }
+};
+
+// Reads that prefix off the fence's opening line: quote markers first
+// ('>' plus one space each, the same bytes block_quote_depth counts), then
+// the run of spaces up to the opening delimiter.
+auto fence_prefix_of(std::string const& _content, uint32_t _block_start) -> fence_prefix {
+    size_t _line_start = _content.rfind('\n', _block_start == 0 ? 0 : _block_start - 1);
+    _line_start = _line_start == std::string::npos ? 0 : _line_start + 1;
+    fence_prefix _prefix;
+    size_t _at = _line_start;
+    while (_at < _block_start && _content[_at] == '>') {
+        ++_prefix.__quote_depth;
+        ++_at;
+        if (_at < _block_start && _content[_at] == ' ') { ++_at; }
+    }
+    _prefix.__indent = static_cast<int>(_block_start - _at);
+    return _prefix;
+}
+
+// Puts one row of a nested fence behind the same prefix its container's
+// prose uses — quote bars in the quote-bar color over the quote background,
+// then the list indentation — so the block sits inside its item instead of
+// at column 0.
+auto prefix_fence_row(fence_prefix const& _prefix, ftxui::Element _row) -> ftxui::Element {
+    if (_prefix.cells() == 0) { return _row; }
+    ftxui::Elements _parts;
+    if (_prefix.__quote_depth > 0) {
+        std::string _bars;
+        _bars.reserve(static_cast<size_t>(_prefix.__quote_depth) * 4);
+        for (int _d = 0; _d < _prefix.__quote_depth; ++_d) { _bars += "\xe2\x94\x82 "; }
+        _parts.push_back(ftxui::text(_bars) | ftxui::color(noam::theme().__syntax.__quote_bar));
+    }
+    if (_prefix.__indent > 0) {
+        _parts.push_back(ftxui::text(std::string(static_cast<size_t>(_prefix.__indent), ' ')));
+    }
+    _parts.push_back(std::move(_row) | ftxui::xflex_grow);
+    ftxui::Element _prefixed = ftxui::hbox(std::move(_parts));
+    if (_prefix.__quote_depth > 0) {
+        _prefixed = ftxui::bgcolor(noam::theme().__syntax.__quote_background,
+                                   std::move(_prefixed));
+    }
+    return _prefixed;
+}
+
+// The code text of a fenced block with the container prefixes tree-sitter
+// leaves inside code_fence_content (list indentation, block-quote markers,
+// including the closing line's) stripped from every line, so the block's
+// own indentation is all that remains. A top-level fence has an empty
+// prefix and yields its content unchanged.
+auto fence_code_text(std::string const& _content,
+                     fenced_code_range const& _fence,
+                     fence_prefix const& _prefix) -> std::string {
+    std::string _code;
+    size_t _pos = _fence.__content_start;
+    while (_pos < _fence.__content_end) {
+        size_t _eol = _content.find('\n', _pos);
+        bool _last = _eol == std::string::npos || _eol >= _fence.__content_end;
+        size_t _line_end = _last ? _fence.__content_end : _eol;
+        std::string _line = _content.substr(_pos, _line_end - _pos);
+        size_t _at = 0;
+        for (int _d = 0; _d < _prefix.__quote_depth; ++_d) {
+            if (_at < _line.size() && _line[_at] == '>') {
+                ++_at;
+                if (_at < _line.size() && _line[_at] == ' ') { ++_at; }
+            }
+        }
+        int _spaces = 0;
+        while (_at + static_cast<size_t>(_spaces) < _line.size() &&
+               _line[_at + static_cast<size_t>(_spaces)] == ' ' &&
+               _spaces < _prefix.__indent) {
+            ++_spaces;
+        }
+        _line.erase(0, _at + static_cast<size_t>(_spaces));
+        // The range ends on the closing delimiter's line, whose leftover
+        // prefix is not a code line.
+        if (!(_last && _line.empty() && _content[_fence.__content_end - 1] != '\n')) {
+            _code += _line;
+            _code += '\n';
+        }
+        if (_last) { break; }
+        _pos = _eol + 1;
+    }
+    return _code;
+}
+
 // Parses the WHOLE `_content` once as a single markdown document to find
 // fenced code blocks — this can only work on the full multi-line text,
 // unlike everything else in this file, which re-parses one physical line
@@ -1616,6 +1713,47 @@ auto find_thematic_breaks(std::string const& _content)
     return _breaks;
 }
 
+// Parses the whole `_content` once to find YAML metadata blocks — same
+// one-shot block parse as find_thematic_breaks above.
+auto find_metadata_blocks(std::string const& _content)
+  -> std::vector<std::pair<uint32_t, uint32_t>> {
+    std::vector<std::pair<uint32_t, uint32_t>> _blocks;
+    language_profile& _profile = profile_for(language::MARKDOWN);
+    ensure_profile_ready(_profile);
+    if (!_profile.__query) { return _blocks; }
+
+    static ts_query_ptr ___metadata_query = [&_profile] {
+        uint32_t _error_offset;
+        TSQueryError _error_type;
+        return ts_query_ptr(ts_query_new(_profile.__get_language(),
+                                         MARKDOWN_METADATA_QUERY,
+                                         static_cast<uint32_t>(sizeof(MARKDOWN_METADATA_QUERY) - 1),
+                                         &_error_offset,
+                                         &_error_type),
+                            ts_query_delete);
+    }();
+    if (!___metadata_query) { return _blocks; }
+
+    std::string _source = _content + "\n"; // block grammar needs a trailing newline
+    ts_tree_ptr _tree(
+      ts_parser_parse_string(
+        _profile.__parser.get(), nullptr, _source.c_str(), static_cast<uint32_t>(_source.size())),
+      ts_tree_delete);
+    TSNode _root = ts_tree_root_node(_tree.get());
+
+    ts_query_cursor_ptr _cursor(ts_query_cursor_new(), ts_query_cursor_delete);
+    ts_query_cursor_exec(_cursor.get(), ___metadata_query.get(), _root);
+
+    TSQueryMatch _match;
+    while (ts_query_cursor_next_match(_cursor.get(), &_match)) {
+        for (uint16_t _i = 0; _i < _match.capture_count; ++_i) {
+            TSNode _node = _match.captures[_i].node;
+            _blocks.emplace_back(ts_node_start_byte(_node), ts_node_end_byte(_node));
+        }
+    }
+    return _blocks;
+}
+
 // Parses the whole `_content` once to find paragraphs — same one-shot block
 // parse as find_thematic_breaks above. A setext heading's content is also a
 // paragraph node, but is left out: its lines keep their own rendering.
@@ -1772,8 +1910,8 @@ auto find_setext_headings(std::string const& _content) -> std::vector<setext_hea
               std::string::npos) {
             continue;
         }
-        if (_content.substr(_break_start, _break_end - _break_start).find_first_not_of(" \t\r\n-") !=
-            std::string::npos) {
+        if (_content.substr(_break_start, _break_end - _break_start)
+              .find_first_not_of(" \t\r\n-") != std::string::npos) {
             continue;
         }
         uint32_t _text_end = static_cast<uint32_t>(_eol);
@@ -1843,13 +1981,46 @@ auto trim_cell(std::string const& _raw) -> std::string {
     return _raw.substr(_b, _e - _b + 1);
 }
 
+// The values of a YAML metadata block's `key: value` lines in source order,
+// keys and surrounding quotes removed; a line carrying no key continues the
+// previous value, and the block's `---` delimiters contribute nothing.
+auto metadata_values(std::string const& _block) -> std::vector<std::string> {
+    std::vector<std::string> _values;
+    size_t _pos = 0;
+    while (_pos < _block.size()) {
+        size_t _eol = _block.find('\n', _pos);
+        std::string _line = _block.substr(_pos, _eol - _pos);
+        if (!_line.empty() && _line.back() == '\r') { _line.pop_back(); }
+        _line = trim_cell(_line);
+        if (!_line.empty() && _line.find_first_not_of('-') != std::string::npos) {
+            size_t _colon = _line.find(':');
+            bool _keyed =
+              _colon != std::string::npos && _colon > 0 && _line.find_first_of(" \t") >= _colon;
+            std::string _text = _keyed ? trim_cell(_line.substr(_colon + 1)) : _line;
+            if (_keyed || _values.empty()) { _values.push_back(_text); }
+            else if (!_text.empty()) { _values.back() += " " + _text; }
+        }
+        if (_eol == std::string::npos) { break; }
+        _pos = _eol + 1;
+    }
+    for (auto& _value : _values) {
+        if (_value.size() >= 2 && ((_value.front() == '"' && _value.back() == '"') ||
+                                   (_value.front() == '\'' && _value.back() == '\''))) {
+            _value = _value.substr(1, _value.size() - 2);
+        }
+    }
+    return _values;
+}
+
 // Renders a whole GFM pipe table (see find_pipe_tables) as a bordered,
 // column-aligned grid — box-drawing borders (the same visual language as
 // this file's ─ fenced-code rule and │ block-quote bar), a bold header
 // row, and per-column alignment from the delimiter row's ':' markers.
 //
-// Column widths are sized to content, then shrunk proportionally to fit
-// `_width` when the table is wider than the screen. A cell's content
+// Column widths are sized to content; when the table is wider than the
+// screen the columns above a common level are capped at it until the table
+// fits, so one very wide cell wraps inside its own column instead of
+// narrowing the columns that already fit. A cell's content
 // is word-wrapped to its column's final width via render_markdown_paragraph
 // — the same wrapping ordinary prose uses — rather than truncated, so a
 // long cell grows its row taller instead of losing text; a row's height is
@@ -1908,28 +2079,29 @@ auto render_pipe_table(std::string const& _content, pipe_table_range const& _tab
     }
 
     int _natural_total = 0;
-    for (int _w : _col_widths) { _natural_total += _w; }
+    int _widest = 1;
+    for (int _w : _col_widths) {
+        _natural_total += _w;
+        _widest = std::max(_widest, _w);
+    }
     int _available = std::max(_width - _overhead, static_cast<int>(_ncols) * _floor);
-    if (_natural_total > _available && _natural_total > 0) {
-        int _shrunk_total = 0;
-        for (size_t _c = 0; _c < _ncols; ++_c) {
-            _col_widths[_c] = std::max(_col_floors[_c],
-                                       static_cast<int>(static_cast<int64_t>(_col_widths[_c]) *
-                                                        _available / _natural_total));
-            _shrunk_total += _col_widths[_c];
-        }
-        int _overflow = _shrunk_total - _available;
-        while (_overflow > 0) {
-            int _best = -1;
+    if (_natural_total > _available) {
+        // `_low` is the highest level at which capping every column at
+        // min(its natural width, max(its floor, level)) fits `_available`,
+        // so the excess comes out of the wide columns alone.
+        int _low = _floor;
+        int _high = _widest;
+        while (_low < _high) {
+            int _level = (_low + _high + 1) / 2;
+            int _capped_total = 0;
             for (size_t _c = 0; _c < _ncols; ++_c) {
-                if (_col_widths[_c] > _col_floors[_c] &&
-                    (_best < 0 || _col_widths[_c] > _col_widths[static_cast<size_t>(_best)])) {
-                    _best = static_cast<int>(_c);
-                }
+                _capped_total += std::min(_col_widths[_c], std::max(_col_floors[_c], _level));
             }
-            if (_best < 0) { break; } // every column is already at its floor
-            --_col_widths[static_cast<size_t>(_best)];
-            --_overflow;
+            if (_capped_total > _available) { _high = _level - 1; }
+            else { _low = _level; }
+        }
+        for (size_t _c = 0; _c < _ncols; ++_c) {
+            _col_widths[_c] = std::min(_col_widths[_c], std::max(_col_floors[_c], _low));
         }
     }
 
@@ -2010,6 +2182,7 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
     std::vector<fenced_code_range> _fences = find_fenced_code_blocks(_content);
     std::vector<pipe_table_range> _tables = find_pipe_tables(_content);
     std::vector<std::pair<uint32_t, uint32_t>> _breaks = find_thematic_breaks(_content);
+    std::vector<std::pair<uint32_t, uint32_t>> _metadata_blocks = find_metadata_blocks(_content);
     std::vector<setext_heading_range> _setexts = find_setext_headings(_content);
     std::vector<list_item_range> _items = find_list_items(_content);
     std::vector<std::pair<uint32_t, uint32_t>> _paragraphs = find_paragraphs(_content);
@@ -2031,6 +2204,49 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
         if (_break != nullptr) {
             _lines.push_back(rule_element(_width, noam::theme().__syntax.__markup_ruler));
             _start = _break->second;
+            continue;
+        }
+
+        // Start of a YAML metadata block (front matter)? Render it as a
+        // document header: its values alone, one wrapped line each, closed
+        // by a gray rule; keys, quotes and the `---` delimiters stay hidden.
+        // The first value is the document's title and reads bold; the
+        // remaining ones are italic in the rule's gray. The node's end lands
+        // just past the closing delimiter's newline, so the skip below eats
+        // the blank line separating front matter from body; the header
+        // carries its own spacing instead.
+        std::pair<uint32_t, uint32_t> const* _metadata = nullptr;
+        for (auto const& _m : _metadata_blocks) {
+            if (_m.first == _start) {
+                _metadata = &_m;
+                break;
+            }
+        }
+        if (_metadata != nullptr) {
+            std::vector<std::string> _values = metadata_values(
+              _content.substr(_metadata->first, _metadata->second - _metadata->first));
+            bool _any = false;
+            bool _title = true;
+            for (auto const& _value : _values) {
+                if (_value.empty()) { continue; }
+                _any = true;
+                for (auto& _row : render_markdown_paragraph(_value, _width, 0)) {
+                    if (_title) {
+                        _lines.push_back(std::move(_row) | ftxui::bold);
+                    }
+                    else {
+                        _lines.push_back(std::move(_row) | ftxui::italic |
+                                         ftxui::color(noam::theme().__syntax.__comment));
+                    }
+                }
+                _title = false;
+            }
+            if (_any) {
+                _lines.push_back(rule_element(_width, noam::theme().__syntax.__comment));
+                _lines.push_back(ftxui::text(""));
+            }
+            _start = _metadata->second;
+            if (_start < _content.size() && _content[_start] == '\n') { ++_start; }
             continue;
         }
 
@@ -2090,14 +2306,22 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
         // that fence's content has been rendered, so a highlighted block
         // is bounded by two rules instead of showing the opening fence as
         // literal text while the closing one silently disappears.
+        size_t _nl = _content.find('\n', _start);
+        size_t _line_end = _nl == std::string::npos ? _content.size() : _nl;
+
+        // A fence nested in a list item or block quote starts after the
+        // container's prefix, so its opening delimiter lands inside this
+        // physical line rather than at its first byte.
         fenced_code_range const* _opening = nullptr;
         for (auto const& _f : _fences) {
-            if (_f.__block_start == _start) {
+            if (_f.__block_start >= _start && _f.__block_start <= _line_end) {
                 _opening = &_f;
                 break;
             }
         }
         if (_opening != nullptr) {
+            fence_prefix _prefix = fence_prefix_of(_content, _opening->__block_start);
+            int _inner = std::max(_width - _prefix.cells(), 1);
             // The grammar highlighting this block's content is named at the end
             // of the opening border; a fence with no recognized language leaves
             // that border bare.
@@ -2105,10 +2329,12 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
             if (_opening->__lang.has_value()) {
                 _grammar = language_display_name(*_opening->__lang);
             }
-            _lines.push_back(rule_element(_width, noam::theme().__syntax.__comment, "-", _grammar));
+            _lines.push_back(prefix_fence_row(
+              _prefix, rule_element(_inner, noam::theme().__syntax.__comment, "-", _grammar)));
             // An empty block has no content to render: close it right away.
             if (_opening->__content_start == _opening->__content_end) {
-                _lines.push_back(rule_element(_width, noam::theme().__syntax.__comment, "-"));
+                _lines.push_back(prefix_fence_row(
+                  _prefix, rule_element(_inner, noam::theme().__syntax.__comment, "-")));
                 _start = _opening->__block_end;
                 continue;
             }
@@ -2135,9 +2361,6 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
             continue;
         }
 
-        size_t _nl = _content.find('\n', _start);
-        size_t _line_end = _nl == std::string::npos ? _content.size() : _nl;
-
         // Is this physical line (fully) inside some fence's code content?
         fenced_code_range const* _fence = nullptr;
         for (auto const& _f : _fences) {
@@ -2162,8 +2385,9 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
             // object spanning several lines) — then consume however many
             // source lines that produced, so the outer while-loop doesn't
             // re-visit and re-render lines already covered here.
-            std::string _code = _content.substr(_fence->__content_start,
-                                                _fence->__content_end - _fence->__content_start);
+            fence_prefix _prefix = fence_prefix_of(_content, _fence->__block_start);
+            int _inner = std::max(_width - _prefix.cells(), 1);
+            std::string _code = fence_code_text(_content, *_fence, _prefix);
             // Every content row gets the fenced-block background, grown to the
             // full width so the block reads as one shaded area (the rules
             // above and below stay outside it).
@@ -2172,8 +2396,8 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
                                       std::move(_row) | ftxui::xflex_grow);
             };
             if (_fence->__lang.has_value()) {
-                for (auto& _row : highlight_fenced_code_block(_code, *_fence->__lang, _width, 0)) {
-                    _lines.push_back(_shade(std::move(_row)));
+                for (auto& _row : highlight_fenced_code_block(_code, *_fence->__lang, _inner, 0)) {
+                    _lines.push_back(prefix_fence_row(_prefix, _shade(std::move(_row))));
                 }
             }
             else {
@@ -2186,12 +2410,14 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
                       _code_nl == std::string::npos ? std::string::npos : _code_nl - _pos;
                     std::vector<code_span> _spans;
                     _spans.push_back(code_span{ _code.substr(_pos, _line_len), {} });
-                    _lines.push_back(_shade(fenced_code_row(_spans, _width, 0)));
+                    _lines.push_back(
+                      prefix_fence_row(_prefix, _shade(fenced_code_row(_spans, _inner, 0))));
                     if (_code_nl == std::string::npos) { break; }
                     _pos = _code_nl + 1;
                 }
             }
-            _lines.push_back(rule_element(_width, noam::theme().__syntax.__comment, "-"));
+            _lines.push_back(prefix_fence_row(
+              _prefix, rule_element(_inner, noam::theme().__syntax.__comment, "-")));
             // __block_end already lands just past the closing delimiter
             // line's own newline (confirmed against the grammar: the
             // fenced_code_block node's end byte is the position right
@@ -2255,8 +2481,8 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
         for (size_t _r = 0; _r < _rows.size(); ++_r) {
             int _pad = _r == 0 ? _indent : _hang;
             if (_pad > 0) {
-                _rows[_r] = ftxui::hbox(
-                  { ftxui::text(std::string(static_cast<size_t>(_pad), ' ')), std::move(_rows[_r]) });
+                _rows[_r] = ftxui::hbox({ ftxui::text(std::string(static_cast<size_t>(_pad), ' ')),
+                                          std::move(_rows[_r]) });
             }
             _lines.push_back(std::move(_rows[_r]));
         }

@@ -14,8 +14,8 @@ auto noam::set_theme(zpt::json const& _theme) -> void {
       noam::render_color(_theme("syntax")("comment"), _result.__syntax.__comment);
     _result.__syntax.__quote_bar =
       noam::render_color(_theme("syntax")("quote_bar"), _result.__syntax.__quote_bar);
-    _result.__syntax.__quote_background = noam::render_color(_theme("syntax")("quote_background"),
-                                                             _result.__syntax.__quote_background);
+    _result.__syntax.__quote_background =
+      noam::render_color(_theme("syntax")("quote_background"), _result.__syntax.__quote_background);
     _result.__syntax.__fenced_block_background = noam::render_color(
       _theme("syntax")("fenced_block_background"), _result.__syntax.__fenced_block_background);
     _result.__syntax.__escape =
@@ -24,16 +24,16 @@ auto noam::set_theme(zpt::json const& _theme) -> void {
       _theme("syntax")("string_special_key"), _result.__syntax.__string_special_key);
     _result.__syntax.__string_special =
       noam::render_color(_theme("syntax")("string_special"), _result.__syntax.__string_special);
-    _result.__syntax.__constant_builtin = noam::render_color(
-      _theme("syntax")("constant_builtin"), _result.__syntax.__constant_builtin);
+    _result.__syntax.__constant_builtin =
+      noam::render_color(_theme("syntax")("constant_builtin"), _result.__syntax.__constant_builtin);
     _result.__syntax.__number =
       noam::render_color(_theme("syntax")("number"), _result.__syntax.__number);
     _result.__syntax.__function =
       noam::render_color(_theme("syntax")("function"), _result.__syntax.__function);
     _result.__syntax.__preproc =
       noam::render_color(_theme("syntax")("preproc"), _result.__syntax.__preproc);
-    _result.__syntax.__variable_builtin = noam::render_color(
-      _theme("syntax")("variable_builtin"), _result.__syntax.__variable_builtin);
+    _result.__syntax.__variable_builtin =
+      noam::render_color(_theme("syntax")("variable_builtin"), _result.__syntax.__variable_builtin);
     _result.__syntax.__variable =
       noam::render_color(_theme("syntax")("variable"), _result.__syntax.__variable);
     _result.__syntax.__markup_strong =
@@ -46,22 +46,21 @@ auto noam::set_theme(zpt::json const& _theme) -> void {
       noam::render_color(_theme("syntax")("markup_link"), _result.__syntax.__markup_link);
     _result.__syntax.__markup_heading =
       noam::render_color(_theme("syntax")("markup_heading"), _result.__syntax.__markup_heading);
-    _result.__syntax.__markup_heading_1 = noam::render_color(
-      _theme("syntax")("markup_heading_1"), _result.__syntax.__markup_heading_1);
-    _result.__syntax.__markup_heading_2 = noam::render_color(
-      _theme("syntax")("markup_heading_2"), _result.__syntax.__markup_heading_2);
-    _result.__syntax.__markup_heading_3 = noam::render_color(
-      _theme("syntax")("markup_heading_3"), _result.__syntax.__markup_heading_3);
-    _result.__syntax.__markup_heading_4 = noam::render_color(
-      _theme("syntax")("markup_heading_4"), _result.__syntax.__markup_heading_4);
-    _result.__syntax.__markup_heading_5 = noam::render_color(
-      _theme("syntax")("markup_heading_5"), _result.__syntax.__markup_heading_5);
-    _result.__syntax.__markup_heading_6 = noam::render_color(
-      _theme("syntax")("markup_heading_6"), _result.__syntax.__markup_heading_6);
+    _result.__syntax.__markup_heading_1 =
+      noam::render_color(_theme("syntax")("markup_heading_1"), _result.__syntax.__markup_heading_1);
+    _result.__syntax.__markup_heading_2 =
+      noam::render_color(_theme("syntax")("markup_heading_2"), _result.__syntax.__markup_heading_2);
+    _result.__syntax.__markup_heading_3 =
+      noam::render_color(_theme("syntax")("markup_heading_3"), _result.__syntax.__markup_heading_3);
+    _result.__syntax.__markup_heading_4 =
+      noam::render_color(_theme("syntax")("markup_heading_4"), _result.__syntax.__markup_heading_4);
+    _result.__syntax.__markup_heading_5 =
+      noam::render_color(_theme("syntax")("markup_heading_5"), _result.__syntax.__markup_heading_5);
+    _result.__syntax.__markup_heading_6 =
+      noam::render_color(_theme("syntax")("markup_heading_6"), _result.__syntax.__markup_heading_6);
     _result.__syntax.__markup_ruler =
       noam::render_color(_theme("syntax")("markup_ruler"), _result.__syntax.__markup_ruler);
-    _result.__syntax.__type =
-      noam::render_color(_theme("syntax")("type"), _result.__syntax.__type);
+    _result.__syntax.__type = noam::render_color(_theme("syntax")("type"), _result.__syntax.__type);
     _result.__syntax.__namespace =
       noam::render_color(_theme("syntax")("namespace"), _result.__syntax.__namespace);
     _result.__syntax.__string =

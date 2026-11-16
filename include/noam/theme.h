@@ -6,8 +6,8 @@ namespace noam {
 
 struct syntax_theme {
     ftxui::Color __comment = ftxui::Color::White;
-    ftxui::Color __quote_bar = ftxui::Color::White;             // Block-quote left bar glyph
-    ftxui::Color __quote_background = ftxui::Color(50, 50, 50); // Block-quote row background
+    ftxui::Color __quote_bar = ftxui::Color::White;                 // Block-quote left bar glyph
+    ftxui::Color __quote_background = ftxui::Color(50, 50, 50);     // Block-quote row background
     ftxui::Color __fenced_block_background = ftxui::Color::Default; // Fenced block row background
     ftxui::Color __escape = ftxui::Color::White;
     ftxui::Color __string_special_key = ftxui::Color::White;
