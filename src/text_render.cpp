@@ -943,16 +943,99 @@ auto terminal_name_of_qualified_identifier(TSNode _node) -> TSNode {
     }
 }
 
+// One run of equally-styled text within a physical line of fenced code.
+struct code_span {
+    std::string __text;
+    std::string __capture; // highlight capture name; empty renders unstyled
+};
+
+// The part of `_text` occupying display cells [`_from`, `_to`). A fullwidth
+// glyph straddling either cut is dropped whole rather than halved, so the
+// result never occupies more cells than the range asks for.
+auto cell_slice(std::string const& _text, int _from, int _to) -> std::string {
+    int const _text_width = ftxui::string_width(_text);
+    _from = std::max(_from, 0);
+    if (_from == 0 && _to >= _text_width) { return _text; }
+    if (_from >= _to || _from >= _text_width) { return {}; }
+
+    // CellToGlyphIndex numbers the glyphs without the empty placeholder that
+    // Utf8ToGlyphs inserts after each fullwidth one, so drop those placeholders
+    // to make the two index the same list.
+    std::vector<std::string> _glyphs;
+    for (std::string& _glyph : ftxui::Utf8ToGlyphs(_text)) {
+        if (!_glyph.empty()) { _glyphs.push_back(std::move(_glyph)); }
+    }
+    std::vector<int> const _cell_to_glyph = ftxui::CellToGlyphIndex(_text);
+
+    int _first_glyph = _cell_to_glyph[static_cast<size_t>(_from)];
+    // A cut landing on the second cell of a fullwidth glyph starts after it.
+    if (_from > 0 && _cell_to_glyph[static_cast<size_t>(_from - 1)] == _first_glyph) {
+        ++_first_glyph;
+    }
+    int const _last_glyph = _to >= static_cast<int>(_cell_to_glyph.size())
+                              ? static_cast<int>(_glyphs.size())
+                              : _cell_to_glyph[static_cast<size_t>(_to)];
+
+    std::string _slice;
+    for (int _glyph = _first_glyph;
+         _glyph < _last_glyph && _glyph < static_cast<int>(_glyphs.size());
+         ++_glyph) {
+        _slice += _glyphs[static_cast<size_t>(_glyph)];
+    }
+    return _slice;
+}
+
+// One row of fenced code: the cells of `_spans` inside the window
+// [`_offset`, `_offset` + `_width`), with a marker taking the last cell when
+// the line runs past the window. A row is windowed here rather than handed to
+// FTXUI whole because an hbox wider than its box has its children shrunk
+// proportionally, which garbles a long line instead of clipping it.
+auto fenced_code_row(std::vector<code_span> const& _spans, int _width, int _offset)
+  -> ftxui::Element {
+    _width = std::max(_width, 1);
+    _offset = std::max(_offset, 0);
+
+    int _line_width = 0;
+    for (code_span const& _span : _spans) { _line_width += ftxui::string_width(_span.__text); }
+
+    bool const _runs_past_window = _offset + _width < _line_width;
+    int const _budget = _runs_past_window ? _width - 1 : _width;
+
+    ftxui::Elements _parts;
+    int _cell = 0; // display cell at which the span being visited starts
+    for (code_span const& _span : _spans) {
+        int const _span_width = ftxui::string_width(_span.__text);
+        int const _from = std::max(_offset - _cell, 0);
+        int const _to = std::min(_offset + _budget - _cell, _span_width);
+        if (_from < _to) {
+            _parts.push_back(ftxui::text(cell_slice(_span.__text, _from, _to)) |
+                             markdown_style_for_capture(_span.__capture));
+        }
+        _cell += _span_width;
+        if (_cell - _offset >= _budget) { break; }
+    }
+
+    if (_runs_past_window) {
+        _parts.push_back(ftxui::text("\xc2\xbb") | // truncation marker
+                         ftxui::color(noam::theme().__syntax.__comment));
+    }
+    // An empty hbox is zero rows tall; a blank code line must still take up
+    // its one row.
+    if (_parts.empty()) { return ftxui::text(""); }
+    return ftxui::hbox(std::move(_parts)) | ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, _width);
+}
+
 // Highlights `_code` (a fenced code block's content, already extracted from
 // its markdown fence) using the tree-sitter profile for `_lang`, returning
-// one styled Element per physical line of `_code` — the language-injection
+// one styled Element per physical line of `_code`, each showing the `_width`
+// cells from column `_offset` — the language-injection
 // counterpart of resolve_markdown_inline_spans, but selecting the grammar
 // dynamically per fence instead of always tree-sitter-markdown-inline, and
 // building Elements directly rather than resolving into the outer
 // document's byte-indexed winner/priorities arrays (a fenced block's
 // content lives in its own coordinate space entirely — it's rendered as
 // its own set of rows, not spliced back into the surrounding prose line).
-auto highlight_fenced_code_block(std::string const& _code, language _lang, int _width)
+auto highlight_fenced_code_block(std::string const& _code, language _lang, int _width, int _offset)
   -> ftxui::Elements {
     language_profile& _profile = profile_for(_lang);
     ensure_profile_ready(_profile);
@@ -998,36 +1081,29 @@ auto highlight_fenced_code_block(std::string const& _code, language _lang, int _
         }
     }
 
-    // Run-length-encode the resolved captures into spans, splitting at
-    // '\n' boundaries too so each output row is exactly one physical code
-    // line (a span never straddles a line break — FTXUI's text() doesn't
-    // treat embedded '\n' as a line break, matching the same constraint
-    // render_markdown_paragraph documents for prose).
+    // Run-length-encode the resolved captures into the spans of one physical
+    // code line at a time (a span never straddles a line break — FTXUI's
+    // text() doesn't treat embedded '\n' as a line break, matching the same
+    // constraint render_markdown_paragraph documents for prose), then window
+    // each line to the visible cells.
     ftxui::Elements _rows;
-    ftxui::Elements _current_row;
+    std::vector<code_span> _line;
     size_t _i = 0;
     while (_i < _code.size()) {
         if (_code[_i] == '\n') {
-            // An empty hbox is zero rows tall; a blank code line must still
-            // take up its one row.
-            _rows.push_back(_current_row.empty()
-                              ? ftxui::text("")
-                              : ftxui::hbox(std::move(_current_row)) |
-                                  ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, std::max(_width, 1)));
-            _current_row = ftxui::Elements{};
+            _rows.push_back(fenced_code_row(_line, _width, _offset));
+            _line.clear();
             ++_i;
             continue;
         }
         size_t _j = _i + 1;
         while (_j < _code.size() && _code[_j] != '\n' && _winner[_j] == _winner[_i]) { ++_j; }
-        _current_row.push_back(ftxui::text(_code.substr(_i, _j - _i)) |
-                               markdown_style_for_capture(_winner[_i]));
+        _line.push_back({ _code.substr(_i, _j - _i), _winner[_i] });
         _i = _j;
     }
-    if (!_current_row.empty()) {
-        _rows.push_back(ftxui::hbox(std::move(_current_row)) |
-                        ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, std::max(_width, 1)));
-    }
+    // The content's trailing newline closes its line rather than starting an
+    // empty one; a final line with no newline still becomes a row.
+    if (!_line.empty()) { _rows.push_back(fenced_code_row(_line, _width, _offset)); }
     return _rows;
 }
 
@@ -2042,7 +2118,7 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
                                       std::move(_row) | ftxui::xflex_grow);
             };
             if (_fence->__lang.has_value()) {
-                for (auto& _row : highlight_fenced_code_block(_code, *_fence->__lang, _width)) {
+                for (auto& _row : highlight_fenced_code_block(_code, *_fence->__lang, _width, 0)) {
                     _lines.push_back(_shade(std::move(_row)));
                 }
             }
@@ -2052,8 +2128,11 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
                 size_t _pos = 0;
                 while (_pos < _code.size()) {
                     size_t _code_nl = _code.find('\n', _pos);
-                    _lines.push_back(_shade(ftxui::text(_code.substr(
-                      _pos, _code_nl == std::string::npos ? std::string::npos : _code_nl - _pos))));
+                    size_t _line_len =
+                      _code_nl == std::string::npos ? std::string::npos : _code_nl - _pos;
+                    std::vector<code_span> _spans;
+                    _spans.push_back(code_span{ _code.substr(_pos, _line_len), {} });
+                    _lines.push_back(_shade(fenced_code_row(_spans, _width, 0)));
                     if (_code_nl == std::string::npos) { break; }
                     _pos = _code_nl + 1;
                 }
