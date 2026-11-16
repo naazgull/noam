@@ -1214,6 +1214,34 @@ auto block_quote_depth(std::string const& _line) -> int {
     return _depth;
 }
 
+// Splits `_word` into pieces of at most `_width` display cells, so a token too
+// wide to ever fit a row on its own (a long URL, a bare path, a minified blob)
+// is broken across rows instead of overflowing the terminal. A glyph wider
+// than `_width` — only possible in a terminal narrower than one fullwidth
+// character — is kept whole rather than dropped.
+auto split_to_width(std::string const& _word, int _width) -> std::vector<std::string> {
+    std::vector<std::string> _pieces;
+    if (ftxui::string_width(_word) <= _width) {
+        _pieces.push_back(_word);
+        return _pieces;
+    }
+    std::string _current;
+    int _current_width = 0;
+    for (std::string const& _glyph : ftxui::Utf8ToGlyphs(_word)) {
+        if (_glyph.empty()) { continue; } // placeholder after a fullwidth glyph
+        int const _glyph_width = ftxui::string_width(_glyph);
+        if (_current_width > 0 && _current_width + _glyph_width > _width) {
+            _pieces.push_back(std::move(_current));
+            _current.clear();
+            _current_width = 0;
+        }
+        _current += _glyph;
+        _current_width += _glyph_width;
+    }
+    if (!_current.empty()) { _pieces.push_back(std::move(_current)); }
+    return _pieces;
+}
+
 // `_paragraph` must not contain an embedded '\n' — resolve_markdown_spans
 // parses it as one block-level document, and a run of several source lines
 // with no blank line between them is one lazily-continued markdown
@@ -1270,7 +1298,10 @@ auto render_markdown_paragraph(std::string const& _paragraph, int _width, int _q
             size_t _next_space = _chunk.find(' ', _pos);
             size_t _word_end = _next_space == std::string::npos ? _chunk.size() : _next_space;
             if (_word_end > _pos) {
-                _tokens.push_back({ _chunk.substr(_pos, _word_end - _pos), _decorate });
+                for (std::string& _piece :
+                     split_to_width(_chunk.substr(_pos, _word_end - _pos), _w)) {
+                    _tokens.push_back({ std::move(_piece), _decorate });
+                }
             }
             if (_next_space == std::string::npos) { break; }
             _tokens.push_back({ " ", _decorate });
@@ -1768,33 +1799,6 @@ auto markdown_visible_width(std::string const& _text) -> int {
     return _width;
 }
 
-// Widest single space-delimited word in `_text`'s resolved spans (hidden
-// markup excluded) — render_markdown_paragraph never splits a word mid-way
-// to make it fit a narrower width, so a column can never be shrunk below
-// this without the word silently overflowing its cell's fixed-width box
-// (ftxui::size(WIDTH, EQUAL, n) clips rather than wraps content wider than
-// n). Used only as a floor on how far render_pipe_table's proportional
-// shrink can narrow a column.
-auto markdown_longest_word_width(std::string const& _text) -> int {
-    int _longest = 0;
-    for (capture_span const& _span : resolve_markdown_spans(_text)) {
-        if (_span.__hidden) { continue; }
-        std::string _chunk = _text.substr(_span.__start, _span.__end - _span.__start);
-        size_t _pos = 0;
-        while (_pos < _chunk.size()) {
-            size_t _next_space = _chunk.find(' ', _pos);
-            size_t _word_end = _next_space == std::string::npos ? _chunk.size() : _next_space;
-            if (_word_end > _pos) {
-                _longest =
-                  std::max(_longest, ftxui::string_width(_chunk.substr(_pos, _word_end - _pos)));
-            }
-            if (_next_space == std::string::npos) { break; }
-            _pos = _next_space + 1;
-        }
-    }
-    return _longest;
-}
-
 auto trim_cell(std::string const& _raw) -> std::string {
     size_t _b = _raw.find_first_not_of(' ');
     if (_b == std::string::npos) { return {}; }
@@ -1841,28 +1845,34 @@ auto render_pipe_table(std::string const& _content, pipe_table_range const& _tab
         _body_text.push_back(std::move(_texts));
     }
 
-    std::vector<int> _col_widths(_ncols, 1);
-    std::vector<int> _col_floors(_ncols,
-                                 3); // never shrink a column below its longest unbreakable word
-    for (size_t _c = 0; _c < _ncols; ++_c) {
-        _col_widths[_c] = std::max(_col_widths[_c], markdown_visible_width(_header_text[_c]));
-        _col_floors[_c] = std::max(_col_floors[_c], markdown_longest_word_width(_header_text[_c]));
-    }
-    for (auto const& _row : _body_text) {
-        for (size_t _c = 0; _c < _ncols; ++_c) {
-            _col_widths[_c] = std::max(_col_widths[_c], markdown_visible_width(_row[_c]));
-            _col_floors[_c] = std::max(_col_floors[_c], markdown_longest_word_width(_row[_c]));
-        }
-    }
-
     // Overhead is (ncols+1) "│" separators plus one leading and one
     // trailing padding space per column: "│ X │ Y │" for two columns is
     // 2 "│ "/" │" pairs around content, i.e. 3*ncols+1 bytes of border and
     // padding around the ncols content widths themselves.
+    int const _overhead = static_cast<int>(_ncols) * 3 + 1;
+
+    // Three cells is the narrowest a column stays readable at, but a table
+    // with more columns than the terminal holds at that floor still has to
+    // fit, so the floor drops toward one rather than letting the row
+    // overflow: a cell wraps to its column's width, and a word too wide for
+    // that is broken across rows, so any width down to one cell renders.
+    int _floor = 3;
+    while (_floor > 1 && static_cast<int>(_ncols) * (3 + _floor) + 1 > _width) { --_floor; }
+
+    std::vector<int> _col_widths(_ncols, 1);
+    std::vector<int> const _col_floors(_ncols, _floor);
+    for (size_t _c = 0; _c < _ncols; ++_c) {
+        _col_widths[_c] = std::max(_col_widths[_c], markdown_visible_width(_header_text[_c]));
+    }
+    for (auto const& _row : _body_text) {
+        for (size_t _c = 0; _c < _ncols; ++_c) {
+            _col_widths[_c] = std::max(_col_widths[_c], markdown_visible_width(_row[_c]));
+        }
+    }
+
     int _natural_total = 0;
     for (int _w : _col_widths) { _natural_total += _w; }
-    int _overhead = static_cast<int>(_ncols) * 3 + 1;
-    int _available = std::max(_width - _overhead, static_cast<int>(_ncols) * 3);
+    int _available = std::max(_width - _overhead, static_cast<int>(_ncols) * _floor);
     if (_natural_total > _available && _natural_total > 0) {
         int _shrunk_total = 0;
         for (size_t _c = 0; _c < _ncols; ++_c) {
