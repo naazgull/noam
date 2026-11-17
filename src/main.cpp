@@ -31,6 +31,9 @@ int main(int _argc, char* _argv[]) {
     noam::pager _pager{ noam::load_document(_argv[1]) };
 
     auto _screen = ftxui::ScreenInteractive::FullscreenAlternateScreen();
+    // FTXUI captures the terminal's mouse by default; noam handles no mouse
+    // input, so leave it with the terminal for its own selection and copy.
+    _screen.TrackMouse(false);
     bool _repainted = false;
 
     // Sizes come from the live terminal, not the screen's dimx()/dimy(): on a
@@ -50,8 +53,12 @@ int main(int _argc, char* _argv[]) {
 
     auto _root = ftxui::CatchEvent(_view, [&](ftxui::Event _event) {
         int _page = std::max(ftxui::Terminal::Size().dimy - 1, 1);
-        if (_event == ftxui::Event::ArrowUp) { _pager.scroll(-1); }
-        else if (_event == ftxui::Event::ArrowDown) { _pager.scroll(1); }
+        if (_event == ftxui::Event::ArrowUp || _event == ftxui::Event::CtrlP) {
+            _pager.scroll(-1);
+        }
+        else if (_event == ftxui::Event::ArrowDown || _event == ftxui::Event::CtrlN) {
+            _pager.scroll(1);
+        }
         else if (_event == ftxui::Event::PageUp) { _pager.scroll(-_page); }
         else if (_event == ftxui::Event::PageDown || _event == ftxui::Event::Character(' ')) {
             _pager.scroll(_page);
