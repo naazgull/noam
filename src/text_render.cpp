@@ -7,6 +7,7 @@
 #include <noam/text_render.h>
 #include <noam/theme.h>
 #include <optional>
+#include <regex>
 #include <string_view>
 #include <tree_sitter/api.h>
 #include <utility>
@@ -653,6 +654,17 @@ constexpr char MARKDOWN_METADATA_QUERY[] = R"scm(
 // breaks, see render_markdown_lines), so its full extent is needed up front.
 constexpr char MARKDOWN_PARAGRAPH_QUERY[] = R"scm(
 (paragraph) @paragraph
+)scm";
+
+// Locates user prompts — paragraphs whose text begins with `@` (a chat
+// transcript's user turns). Structural extraction like the queries above:
+// the prompt renders as a whole in the prompt theme color, its `@` marker
+// replaced by the theme's prefix glyph. The #match? predicate selects the
+// `@`-initial paragraphs; find_prompt_blocks evaluates it against the
+// captured text, since the C query cursor yields structural matches only.
+constexpr char MARKDOWN_PROMPT_QUERY[] = R"scm(
+((paragraph) @prompt
+ (#match? @prompt "^@"))
 )scm";
 
 // Hand-written against tree-sitter-markdown-inline. Bold/italic/code spans
@@ -1801,6 +1813,85 @@ auto find_paragraphs(std::string const& _content) -> std::vector<std::pair<uint3
     return _paragraphs;
 }
 
+// Parses the whole `_content` once to find user prompts — same one-shot block
+// parse as find_metadata_blocks above. The query's #match? predicate keeps
+// only paragraphs whose text begins with `@`.
+auto find_prompt_blocks(std::string const& _content)
+  -> std::vector<std::pair<uint32_t, uint32_t>> {
+    std::vector<std::pair<uint32_t, uint32_t>> _prompts;
+    language_profile& _profile = profile_for(language::MARKDOWN);
+    ensure_profile_ready(_profile);
+    if (!_profile.__query) { return _prompts; }
+
+    static ts_query_ptr ___prompt_query = [&_profile] {
+        uint32_t _error_offset;
+        TSQueryError _error_type;
+        return ts_query_ptr(ts_query_new(_profile.__get_language(),
+                                         MARKDOWN_PROMPT_QUERY,
+                                         static_cast<uint32_t>(sizeof(MARKDOWN_PROMPT_QUERY) - 1),
+                                         &_error_offset,
+                                         &_error_type),
+                            ts_query_delete);
+    }();
+    if (!___prompt_query) { return _prompts; }
+
+    std::string _source = _content + "\n"; // block grammar needs a trailing newline
+    ts_tree_ptr _tree(
+      ts_parser_parse_string(
+        _profile.__parser.get(), nullptr, _source.c_str(), static_cast<uint32_t>(_source.size())),
+      ts_tree_delete);
+    TSNode _root = ts_tree_root_node(_tree.get());
+
+    ts_query_cursor_ptr _cursor(ts_query_cursor_new(), ts_query_cursor_delete);
+    ts_query_cursor_exec(_cursor.get(), ___prompt_query.get(), _root);
+
+    TSQueryMatch _match;
+    while (ts_query_cursor_next_match(_cursor.get(), &_match)) {
+        // The C query cursor yields structural matches without evaluating
+        // text predicates, so apply this pattern's #match? to the captured
+        // text here, keeping the query as the source of truth.
+        uint32_t _pred_len = 0;
+        TSQueryPredicateStep const* _pred =
+          ts_query_predicates_for_pattern(___prompt_query.get(), _match.pattern_index, &_pred_len);
+        bool _keep = true;
+        for (uint32_t _p = 0; _p < _pred_len;) {
+            uint32_t _end = _p;
+            while (_end < _pred_len && _pred[_end].type != TSQueryPredicateStepTypeDone) { ++_end; }
+            if (_end - _p >= 3 && _pred[_p].type == TSQueryPredicateStepTypeString &&
+                _pred[_p + 1].type == TSQueryPredicateStepTypeCapture &&
+                _pred[_p + 2].type == TSQueryPredicateStepTypeString) {
+                uint32_t _name_len = 0;
+                char const* _name =
+                  ts_query_string_value_for_id(___prompt_query.get(), _pred[_p].value_id, &_name_len);
+                if (std::string_view(_name, _name_len) == "match?") {
+                    uint32_t _re_len = 0;
+                    char const* _re = ts_query_string_value_for_id(
+                      ___prompt_query.get(), _pred[_p + 2].value_id, &_re_len);
+                    std::regex _regex(std::string(_re, _re_len));
+                    uint16_t _capture = static_cast<uint16_t>(_pred[_p + 1].value_id);
+                    for (uint16_t _c = 0; _c < _match.capture_count; ++_c) {
+                        if (_match.captures[_c].index != _capture) { continue; }
+                        TSNode _node = _match.captures[_c].node;
+                        uint32_t _s = ts_node_start_byte(_node);
+                        uint32_t _e = std::min<uint32_t>(ts_node_end_byte(_node), _content.size());
+                        if (!std::regex_search(_content.substr(_s, _e - _s), _regex)) {
+                            _keep = false;
+                        }
+                        break;
+                    }
+                }
+            }
+            _p = _end + 1;
+        }
+        if (!_keep) { continue; }
+        for (uint16_t _i = 0; _i < _match.capture_count; ++_i) {
+            TSNode _node = _match.captures[_i].node;
+            _prompts.emplace_back(ts_node_start_byte(_node), ts_node_end_byte(_node));
+        }
+    }
+    return _prompts;
+}
+
 // Whether a paragraph source line ends in a CommonMark hard line break (two
 // or more trailing spaces, or a trailing backslash).
 auto ends_with_hard_break(std::string const& _line) -> bool {
@@ -2186,6 +2277,7 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
     std::vector<setext_heading_range> _setexts = find_setext_headings(_content);
     std::vector<list_item_range> _items = find_list_items(_content);
     std::vector<std::pair<uint32_t, uint32_t>> _paragraphs = find_paragraphs(_content);
+    std::vector<std::pair<uint32_t, uint32_t>> _prompts = find_prompt_blocks(_content);
 
     ftxui::Elements _lines;
     size_t _start = 0;
@@ -2424,6 +2516,47 @@ auto noam::render_markdown_lines(std::string const& _content, int _width) -> ftx
             // after that '\n', not the '\n' itself) — no further skip
             // needed, unlike the content-only skip above.
             _start = _fence->__block_end;
+            continue;
+        }
+
+        // Start of a user prompt (a paragraph beginning with `@`)? Render it
+        // as a whole in the prompt theme color, the `@` marker replaced by
+        // the theme's prefix glyph, then jump past it — the same "replace
+        // this whole block" treatment as the front matter above.
+        std::pair<uint32_t, uint32_t> const* _prompt = nullptr;
+        for (auto const& _pr : _prompts) {
+            if (_pr.first == _start) {
+                _prompt = &_pr;
+                break;
+            }
+        }
+        if (_prompt != nullptr) {
+            std::string _raw =
+              _content.substr(_prompt->first, _prompt->second - _prompt->first);
+            // Join the prompt's source lines as soft breaks (the same wrapping
+            // ordinary prose uses), then swap the leading `@` for the glyph.
+            std::string _text;
+            size_t _pos = 0;
+            while (_pos <= _raw.size()) {
+                size_t _raw_nl = _raw.find('\n', _pos);
+                std::string _piece = _raw.substr(
+                  _pos, _raw_nl == std::string::npos ? std::string::npos : _raw_nl - _pos);
+                if (_pos != 0) { _piece = strip_continuation(_piece); }
+                _piece.erase(_piece.find_last_not_of(" \t") + 1);
+                if (!_piece.empty()) { _text += (_text.empty() ? "" : " ") + _piece; }
+                if (_raw_nl == std::string::npos) { break; }
+                _pos = _raw_nl + 1;
+            }
+            // The glyph replaces the `@` marker and is separated from the
+            // prompt text by a single space, whatever spacing followed the `@`.
+            std::string _body = _text.substr(1);
+            _body.erase(0, _body.find_first_not_of(" \t"));
+            _text = noam::theme().__syntax.__prompt_prefix;
+            if (!_body.empty()) { _text += " " + _body; }
+            for (auto& _row : render_markdown_paragraph(_text, _width, 0)) {
+                _lines.push_back(std::move(_row) | ftxui::color(noam::theme().__syntax.__prompt));
+            }
+            _start = _prompt->second;
             continue;
         }
 

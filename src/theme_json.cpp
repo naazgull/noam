@@ -79,6 +79,12 @@ auto noam::set_theme(zpt::json const& _theme) -> void {
       noam::render_color(_theme("syntax")("diff_removal"), _result.__syntax.__diff_removal);
     _result.__syntax.__diff_header =
       noam::render_color(_theme("syntax")("diff_header"), _result.__syntax.__diff_header);
+    _result.__syntax.__prompt =
+      noam::render_color(_theme("syntax")("prompt"), _result.__syntax.__prompt);
+    auto _prompt_prefix = _theme("syntax")("prompt_prefix");
+    if (_prompt_prefix != json_null && _prompt_prefix->is_string()) {
+        _result.__syntax.__prompt_prefix = _prompt_prefix->string();
+    }
 
     noam::set_theme(_result);
 }

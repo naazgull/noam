@@ -104,6 +104,7 @@ auto noam::pager::rows(int _width, int _height) -> ftxui::Elements {
             ++_row;
         }
     }
+    if (this->__row_filter) { return this->__row_filter(std::move(_visible)); }
     return _visible;
 }
 
@@ -112,6 +113,51 @@ auto noam::pager::scroll(int _delta) -> void { this->__top += _delta; }
 auto noam::pager::home() -> void { this->__jump = -1; }
 
 auto noam::pager::end() -> void { this->__jump = 1; }
+
+auto noam::pager::set_row_filter(row_filter _filter) -> void {
+    this->__row_filter = std::move(_filter);
+}
+
+// The last page begins at a block boundary, so re-parsing from there captures
+// any block the new text continues (an open paragraph or fence) without
+// touching the rest of the document. Pages before the last keep their cached
+// renders; the reading position is window-relative and content only grows at
+// the end, so it stays valid.
+auto noam::pager::append(std::string _text) -> void {
+    if (_text.empty()) { return; }
+    if (this->__pages.empty()) {
+        // Not laid out yet: the first rows() call splits the whole document.
+        this->__content += _text;
+        return;
+    }
+    size_t _tail_start = this->__pages.back().first;
+    size_t _old_last = this->__pages.size() - 1;
+    this->__content += _text;
+    auto _tail_pages = split_pages(
+      this->__content.substr(_tail_start), 2 * static_cast<size_t>(std::max(this->__height, 1)));
+    this->__pages.pop_back();
+    for (auto const& _page : _tail_pages) {
+        this->__pages.emplace_back(_tail_start + _page.first, _tail_start + _page.second);
+    }
+    for (auto& _page : this->__window) {
+        if (_page.__index >= _old_last) { _page.__rows = this->render(_page.__index); }
+    }
+}
+
+// The document's end is the end of the last page; once that page is in the
+// window, window_rows() reaches it, so the pending position plus the viewport
+// height tells whether the view is at the bottom (un-applied scroll included).
+auto noam::pager::at_bottom() -> bool {
+    if (this->__pages.empty()) { return true; }
+    if (this->__jump > 0) { return true; } // pending jump to the end
+    if (this->__window.empty()) { this->reset_window(0); }
+    while (this->__window.back().__index + 1 < this->__pages.size()) {
+        size_t _index = this->__window.back().__index + 1;
+        this->__window.push_back({ _index, this->render(_index) });
+    }
+    int _height = std::max(this->__height, 1);
+    return this->__top + _height >= this->window_rows();
+}
 
 // A new height re-splits the document, keeping the position at the page that
 // holds the current top row (and the same row offset into it); a new width

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ftxui/screen/color.hpp>
+#include <string>
 
 namespace noam {
 
@@ -40,6 +41,8 @@ struct syntax_theme {
     ftxui::Color __diff_addition = ftxui::Color::Green; // ```diff added line
     ftxui::Color __diff_removal = ftxui::Color::Red;    // ```diff removed line
     ftxui::Color __diff_header = ftxui::Color::White;   // ```diff file/hunk-location header (bold)
+    ftxui::Color __prompt = ftxui::Color::White;        // User-prompt (`@ ...`) text
+    std::string __prompt_prefix = "@";                  // Glyph shown in place of the `@` marker
 };
 
 struct noam_theme {

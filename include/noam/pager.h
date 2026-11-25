@@ -2,6 +2,7 @@
 
 #include <deque>
 #include <ftxui/dom/elements.hpp>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,6 +19,8 @@ namespace noam {
 // own. Pages are rendered on demand and at most three are kept, so the reader
 // scrolls across page boundaries without seeing them. Changing the width
 // re-renders the kept pages; changing the height re-splits the document.
+// Content may grow with append(), which re-parses and re-renders only the
+// tail; an optional row filter is applied to the visible rows on each call.
 class pager {
   public:
     explicit pager(std::string _content);
@@ -31,6 +34,19 @@ class pager {
     // Jump to the start or the end of the document.
     auto home() -> void;
     auto end() -> void;
+
+    // Append `_text` to the document, re-parsing and re-rendering only the
+    // tail (the last page onward); earlier pages and the reading position are
+    // kept.
+    auto append(std::string _text) -> void;
+    // Whether the current position is at the end of the document, counting
+    // scroll that has not been applied yet. Renders forward to the last page
+    // if it is not already in the window.
+    auto at_bottom() -> bool;
+    // A filter applied to the visible rows on each rows() call, after caching;
+    // the cache itself stays unfiltered. Empty leaves the rows unchanged.
+    using row_filter = std::function<ftxui::Elements(ftxui::Elements)>;
+    auto set_row_filter(row_filter _filter) -> void;
 
   private:
     struct page {
@@ -51,6 +67,7 @@ class pager {
     int __jump = 0;  // pending jump to the start (-1) or the end (1)
     int __width = 0; // screen size the pages were split and rendered for
     int __height = 0;
+    row_filter __row_filter; // applied to the visible rows in rows()
 };
 
 } // namespace noam
